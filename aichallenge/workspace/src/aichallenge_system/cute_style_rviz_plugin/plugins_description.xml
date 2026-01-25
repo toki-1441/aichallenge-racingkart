@@ -1,0 +1,8 @@
+<library path="cute_style_rviz_plugin">
+  <class
+    name="cute_style_rviz_plugin/CuteStylePanel"
+    type="cute_style_rviz_plugin::CuteStylePanel"
+    base_class_type="rviz_common::Panel">
+    <description>Applies a cute pink/purple Qt stylesheet to RViz; can be updated live from a std_msgs/String topic.</description>
+  </class>
+</library>

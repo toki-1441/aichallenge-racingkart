@@ -1,0 +1,7 @@
+# Simple theme variables for Python generator (cute_theme_generate.py)
+background: "#1b1026"
+surface: "#2a1140"
+surface2: "#3a1659"
+pink: "#ff69b4"
+purple: "#ba68c8"
+text: "#ffe7ff"
