@@ -375,6 +375,21 @@ install_base_packages() {
         python3-pip
 }
 
+install_rocker() {
+    if cmd_exists rocker; then
+        log "${OK} rocker already installed"
+        return 0
+    fi
+    pip install rocker
+    # Ensure ~/.local/bin is on PATH
+    if ! echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"; then
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+        export PATH="$HOME/.local/bin:$PATH"
+        log "${INFO} Added ~/.local/bin to PATH in ~/.bashrc"
+    fi
+    log "${OK} Installed rocker"
+}
+
 install_docker_if_missing() {
     if cmd_exists docker && docker --version >/dev/null 2>&1; then
         log "${OK} Docker already installed"
@@ -744,6 +759,7 @@ EOF
 
     run_step_if "${do_install_base}" "Install base packages (apt)" install_base_packages
     run_step_if "${do_install_docker}" "Install Docker (if missing)" install_docker_if_missing
+    run_step_if "${do_install_docker}" "Install rocker (pip)" install_rocker
     run_step_if "${do_docker_group}" "Add user to docker group (recommended)" ensure_docker_group
 
     # Best-effort verification (avoid hard-fail on network issues)
