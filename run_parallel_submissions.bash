@@ -132,6 +132,8 @@ main() {
         log "Starting autoware-d${domain_id}"
         LOG_DIR="${log_dir}" \
             RUN_MODE="awsim" \
+            ROS_HOME="${log_dir}/.ros" \
+            ROS_LOG_DIR="${log_dir}/ros_log" \
             docker compose up -d --force-recreate "autoware-d${domain_id}"
     done
 
