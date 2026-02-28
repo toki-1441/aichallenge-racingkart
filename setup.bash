@@ -673,33 +673,38 @@ EOF
     local do_make_autoware_build=0
     local do_make_dev=0
 
+    local _n=0
+    log_step() { _n=$((_n + 1)); log "$(printf '%3d) %s' "$_n" "$1")"; }
+
     log "${INFO} Planned steps (answer y/N for each, then execution starts):"
-    log "  1) Install base packages (apt)"
-    log "  2) Install Docker (if missing)"
-    log "  3) Add user to docker group (recommended)"
-    log "  4) Clone/update repository (branch=${branch}) -> ${dest_dir}"
-    log "  5) Repo preflight: ./setup.bash doctor (requires repo)"
+    log_step "Install base packages (apt)"
+    log_step "Install Docker (if missing)"
+    log_step "Install rocker (pip)"
+    log_step "Add user to docker group (recommended)"
+    log_step "Clone/update repository (branch=${branch}) -> ${dest_dir}"
+    log_step "Repo preflight: ./setup.bash doctor (requires repo)"
+    log_step "Create .env (GPU/CPU auto-detect)"
     if [ "$skip_pull_image" -ne 1 ]; then
-        log "  6) Pull Autoware base image (requires repo)"
+        log_step "Pull Autoware base image (requires repo)"
     else
-        log "  6) Pull Autoware base image (SKIP: --skip-pull-image)"
+        log_step "Pull Autoware base image (SKIP: --skip-pull-image)"
     fi
     if [ "$skip_awsim" -ne 1 ]; then
-        log "  7) Download AWSIM.zip and extract (requires repo)"
+        log_step "Download AWSIM.zip and extract (requires repo)"
     else
-        log "  7) Download AWSIM.zip and extract (SKIP: --skip-awsim)"
+        log_step "Download AWSIM.zip and extract (SKIP: --skip-awsim)"
     fi
     if [ "$skip_build" -ne 1 ]; then
-        log "  8) Build dev image: ./docker_build.sh dev (requires repo)"
+        log_step "Build dev image: ./docker_build.sh dev (requires repo)"
     else
-        log "  8) Build dev image: ./docker_build.sh dev (SKIP: --skip-build)"
+        log_step "Build dev image: ./docker_build.sh dev (SKIP: --skip-build)"
     fi
     if [ "$skip_make" -ne 1 ]; then
-        log "  9) make autoware-build (requires repo)"
-        log " 10) make dev DOMAIN_ID=${DOMAIN_ID:-1} (requires repo)"
+        log_step "make autoware-build (requires repo)"
+        log_step "make dev DOMAIN_ID=${DOMAIN_ID:-1} (requires repo)"
     else
-        log "  9) make autoware-build (SKIP: --skip-make)"
-        log " 10) make dev (SKIP: --skip-make)"
+        log_step "make autoware-build (SKIP: --skip-make)"
+        log_step "make dev (SKIP: --skip-make)"
     fi
 
     if confirm_step "Install base packages (apt)"; then
