@@ -674,6 +674,7 @@ EOF
 
     local _n=0
     log_step() { _n=$((_n + 1)); log "$(printf '%3d) %s' "$_n" "$1")"; }
+    _skip_note() { [ "${1:-0}" -ne 1 ] && echo "(requires repo)" || echo "(SKIP: $2)"; }
 
     log "${INFO} Planned steps (answer y/N for each, then execution starts):"
     log_step "Install base packages (apt)"
@@ -683,80 +684,32 @@ EOF
     log_step "Clone/update repository (branch=${branch}) -> ${dest_dir}"
     log_step "Repo doctor: ./setup.bash doctor (requires repo)"
     log_step "Create .env (GPU/CPU auto-detect)"
-    if [ "$skip_pull_image" -ne 1 ]; then
-        log_step "Pull Autoware base image (requires repo)"
-    else
-        log_step "Pull Autoware base image (SKIP: --skip-pull-image)"
-    fi
-    if [ "$skip_awsim" -ne 1 ]; then
-        log_step "Download AWSIM.zip and extract (requires repo)"
-    else
-        log_step "Download AWSIM.zip and extract (SKIP: --skip-awsim)"
-    fi
-    if [ "$skip_build" -ne 1 ]; then
-        log_step "Build dev image: ./docker_build.sh dev (requires repo)"
-    else
-        log_step "Build dev image: ./docker_build.sh dev (SKIP: --skip-build)"
-    fi
-    if [ "$skip_make" -ne 1 ]; then
-        log_step "make autoware-build (requires repo)"
-        log_step "make dev DOMAIN_ID=${DOMAIN_ID:-1} (requires repo)"
-    else
-        log_step "make autoware-build (SKIP: --skip-make)"
-        log_step "make dev (SKIP: --skip-make)"
-    fi
+    log_step "Pull Autoware base image $(_skip_note "$skip_pull_image" "--skip-pull-image")"
+    log_step "Download AWSIM.zip and extract $(_skip_note "$skip_awsim" "--skip-awsim")"
+    log_step "Build dev image: ./docker_build.sh dev $(_skip_note "$skip_build" "--skip-build")"
+    log_step "make autoware-build $(_skip_note "$skip_make" "--skip-make")"
+    log_step "make dev DOMAIN_ID=${DOMAIN_ID:-1} $(_skip_note "$skip_make" "--skip-make")"
 
-    if confirm_step "Install base packages (apt)"; then
-        do_install_base=1
-    fi
-    if confirm_step "Install Docker (if missing)"; then
-        do_install_docker=1
-    fi
-    if confirm_step "Add user to docker group (recommended)"; then
-        do_docker_group=1
-    fi
+    confirm_step "Install base packages (apt)" && do_install_base=1 || true
+    confirm_step "Install Docker (if missing)" && do_install_docker=1 || true
+    confirm_step "Add user to docker group (recommended)" && do_docker_group=1 || true
 
     local repo_exists_now=0
-    if is_repo_root_dir "${dest_dir}"; then
-        repo_exists_now=1
-    fi
+    is_repo_root_dir "${dest_dir}" && repo_exists_now=1 || true
+    confirm_step "Clone/update repository (branch=${branch}) -> ${dest_dir}" && do_clone_repo=1 || true
 
-    if confirm_step "Clone/update repository (branch=${branch}) -> ${dest_dir}"; then
-        do_clone_repo=1
-    fi
-
-    local repo_planned=0
     if [ "${repo_exists_now}" -eq 1 ] || [ "${do_clone_repo}" -eq 1 ]; then
-        repo_planned=1
-    fi
-
-    if [ "${repo_planned}" -eq 1 ]; then
-        if confirm_step "Run repo doctor: ./setup.bash doctor"; then
-            do_repo_doctor=1
-        fi
-        if [ "$skip_pull_image" -ne 1 ] && confirm_step "Pull Autoware base image"; then
-            do_pull_image=1
-        fi
-        if [ "$skip_awsim" -ne 1 ] && confirm_step "Download AWSIM.zip and extract"; then
-            do_download_awsim=1
-        fi
-        if [ "$skip_build" -ne 1 ] && confirm_step "Build dev image: ./docker_build.sh dev"; then
-            do_build_dev_image=1
-        fi
+        confirm_step "Run repo doctor: ./setup.bash doctor" && do_repo_doctor=1 || true
+        [ "$skip_pull_image" -ne 1 ] && confirm_step "Pull Autoware base image" && do_pull_image=1 || true
+        [ "$skip_awsim" -ne 1 ] && confirm_step "Download AWSIM.zip and extract" && do_download_awsim=1 || true
+        [ "$skip_build" -ne 1 ] && confirm_step "Build dev image: ./docker_build.sh dev" && do_build_dev_image=1 || true
         if [ "$skip_make" -ne 1 ]; then
-            if confirm_step "Run make autoware-build (this can take a while)"; then
-                do_make_autoware_build=1
-            fi
-            if confirm_step "Run make dev DOMAIN_ID=${DOMAIN_ID:-1}"; then
-                do_make_dev=1
-            fi
+            confirm_step "Run make autoware-build (this can take a while)" && do_make_autoware_build=1 || true
+            confirm_step "Run make dev DOMAIN_ID=${DOMAIN_ID:-1}" && do_make_dev=1 || true
         fi
     else
         log "${INFO} Repo steps skipped (repo not selected / not present)"
-        skip_pull_image=1
-        skip_awsim=1
-        skip_build=1
-        skip_make=1
+        skip_pull_image=1; skip_awsim=1; skip_build=1; skip_make=1
     fi
 
     log "${INFO} Starting execution..."
