@@ -380,7 +380,7 @@ install_rocker() {
         log "${OK} rocker already installed"
         return 0
     fi
-    pip install rocker
+    pip3 install --user rocker
     # Ensure ~/.local/bin is on PATH
     if ! echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"; then
         # shellcheck disable=SC2016
@@ -665,6 +665,7 @@ EOF
 
     local do_install_base=0
     local do_install_docker=0
+    local do_install_rocker=0
     local do_docker_group=0
     local do_clone_repo=0
     local do_repo_doctor=0
@@ -697,6 +698,7 @@ EOF
 
     confirm_step "Install base packages (apt)" && do_install_base=1 || true
     confirm_step "Install Docker (if missing)" && do_install_docker=1 || true
+    confirm_step "Install rocker (pip)" && do_install_rocker=1 || true
     confirm_step "Add user to docker group (recommended)" && do_docker_group=1 || true
 
     local repo_exists_now=0
@@ -724,7 +726,7 @@ EOF
 
     run_step_if "${do_install_base}" "Install base packages (apt)" install_base_packages
     run_step_if "${do_install_docker}" "Install Docker (if missing)" install_docker_if_missing
-    run_step_if "${do_install_docker}" "Install rocker (pip)" install_rocker
+    run_step_if "${do_install_rocker}" "Install rocker (pip)" install_rocker
     run_step_if "${do_docker_group}" "Add user to docker group (recommended)" ensure_docker_group
 
     # Best-effort verification (avoid hard-fail on network issues)
@@ -752,7 +754,7 @@ EOF
     if is_repo_root_dir "${dest_dir}"; then
         run_step_if "${do_repo_doctor}" "Run repo doctor: ./setup.bash doctor" bash "${dest_dir}/setup.bash" doctor || true
         # Create .env with GPU/CPU selection
-        (cd "${dest_dir}" && bash ./setup.bash env) || true
+        (cd "${dest_dir}" && AIC_ASSUME_YES="${SETUP_ASSUME_YES}" bash ./setup.bash env) || true
     fi
 
     if [ "$skip_pull_image" -ne 1 ]; then
