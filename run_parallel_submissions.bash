@@ -35,7 +35,8 @@ ensure_output_dirs() {
     local vehicles="$2"
     local domain_id
     for ((domain_id = 1; domain_id <= vehicles; domain_id++)); do
-        mkdir -p "${REPO_ROOT}/output/${run_id}/d${domain_id}"
+        mkdir -p "${REPO_ROOT}/output/${run_id}/d${domain_id}/.ros"
+        mkdir -p "${REPO_ROOT}/output/${run_id}/d${domain_id}/ros_log"
     done
 }
 
