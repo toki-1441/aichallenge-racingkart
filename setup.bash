@@ -970,8 +970,11 @@ PY
 
 ensure_env() {
     if [ -f .env ]; then
-        log "${OK} .env already exists"
-        return 0
+        if ! confirm_step ".env already exists. Replace with fresh .env.example?"; then
+            log "${OK} Keeping existing .env"
+            return 0
+        fi
+        rm -f .env
     fi
     if [ ! -f .env.example ]; then
         warn "${FAIL} .env.example not found"
@@ -1138,7 +1141,7 @@ main() {
         fi
         bootstrap --branch "${test_branch}" --temp-dir "$@"
         ;;
-    preflight | doctor)
+    doctor)
         doctor
         ;;
     bootstrap)
