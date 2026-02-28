@@ -251,16 +251,15 @@ run_step_if() {
 usage() {
     cat <<'EOF'
 Usage:
-  ./setup.bash                # run preflight checks (no install)
+  ./setup.bash                # run doctor (environment check + next steps)
   curl -fsSL https://raw.githubusercontent.com/AutomotiveAIChallenge/aichallenge-racingkart/main/setup.bash | bash
                             # bootstrap a fresh Ubuntu host (installs Docker if missing)
-  ./setup.bash preflight      # same as default
+  ./setup.bash doctor         # environment check + next steps summary
   ./setup.bash bootstrap      # install Docker if missing + clone repo + run setup (for fresh PCs)
   ./setup.bash test [BRANCH]  # bootstrap into /tmp (kept by default; default: origin/test)
   ./setup.bash pull image     # docker pull Autoware base image (recommended)
   ./setup.bash download awsim # download & extract AWSIM.zip (repo-local)
   ./setup.bash env            # create .env from .env.example (safe, repo-local)
-  ./setup.bash doctor         # run preflight + next steps summary
   ./setup.bash bootstrap --yes
                             # non-interactive bootstrap (auto-yes)
   ./setup.bash bootstrap --temp-dir [--keep-dir]
@@ -682,7 +681,7 @@ EOF
     log_step "Install rocker (pip)"
     log_step "Add user to docker group (recommended)"
     log_step "Clone/update repository (branch=${branch}) -> ${dest_dir}"
-    log_step "Repo preflight: ./setup.bash doctor (requires repo)"
+    log_step "Repo doctor: ./setup.bash doctor (requires repo)"
     log_step "Create .env (GPU/CPU auto-detect)"
     if [ "$skip_pull_image" -ne 1 ]; then
         log_step "Pull Autoware base image (requires repo)"
@@ -732,7 +731,7 @@ EOF
     fi
 
     if [ "${repo_planned}" -eq 1 ]; then
-        if confirm_step "Run repo preflight: ./setup.bash doctor"; then
+        if confirm_step "Run repo doctor: ./setup.bash doctor"; then
             do_repo_doctor=1
         fi
         if [ "$skip_pull_image" -ne 1 ] && confirm_step "Pull Autoware base image"; then
@@ -790,7 +789,7 @@ EOF
     fi
 
     if is_repo_root_dir "${dest_dir}"; then
-        run_step_if "${do_repo_doctor}" "Run repo preflight: ./setup.bash doctor" bash "${dest_dir}/setup.bash" doctor || true
+        run_step_if "${do_repo_doctor}" "Run repo doctor: ./setup.bash doctor" bash "${dest_dir}/setup.bash" doctor || true
         # Create .env with GPU/CPU selection
         (cd "${dest_dir}" && bash ./setup.bash env) || true
     fi
@@ -1027,7 +1026,7 @@ ensure_env() {
     fi
 }
 
-preflight() {
+doctor() {
     local failed=0
 
     echo "=== Host / OS ==="
@@ -1175,15 +1174,6 @@ preflight() {
         echo "${INFO} nvidia-smi not found (CPU-only is OK)"
     fi
 
-    return "$failed"
-}
-
-doctor() {
-    local rc=0
-    if ! preflight; then
-        rc=1
-    fi
-
     echo ""
     echo "=== Next steps ==="
     echo "${INFO} 1) If Docker missing:  ./setup.bash bootstrap"
@@ -1195,7 +1185,7 @@ doctor() {
     echo "${INFO} 7) Start dev:          make dev DOMAIN_ID=1"
     echo "${INFO} 8) Dev shell:          docker compose run --rm -it --entrypoint bash autoware"
 
-    return "$rc"
+    return "$failed"
 }
 
 main() {
@@ -1231,10 +1221,7 @@ main() {
         fi
         bootstrap --branch "${test_branch}" --temp-dir "$@"
         ;;
-    preflight)
-        preflight
-        ;;
-    doctor)
+    preflight | doctor)
         doctor
         ;;
     bootstrap)
