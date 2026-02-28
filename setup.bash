@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015  # A && B || C: B is always a simple assignment, so C never runs on A-success.
 set -euo pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]:-${0-}}"
@@ -382,7 +383,8 @@ install_rocker() {
     pip install rocker
     # Ensure ~/.local/bin is on PATH
     if ! echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"; then
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+        # shellcheck disable=SC2016
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >>~/.bashrc
         export PATH="$HOME/.local/bin:$PATH"
         log "${INFO} Added ~/.local/bin to PATH in ~/.bashrc"
     fi
@@ -673,7 +675,10 @@ EOF
     local do_make_dev=0
 
     local _n=0
-    log_step() { _n=$((_n + 1)); log "$(printf '%3d) %s' "$_n" "$1")"; }
+    log_step() {
+        _n=$((_n + 1))
+        log "$(printf '%3d) %s' "$_n" "$1")"
+    }
     _skip_note() { [ "${1:-0}" -ne 1 ] && echo "(requires repo)" || echo "(SKIP: $2)"; }
 
     log "${INFO} Planned steps (answer y/N for each, then execution starts):"
@@ -709,7 +714,10 @@ EOF
         fi
     else
         log "${INFO} Repo steps skipped (repo not selected / not present)"
-        skip_pull_image=1; skip_awsim=1; skip_build=1; skip_make=1
+        skip_pull_image=1
+        skip_awsim=1
+        skip_build=1
+        skip_make=1
     fi
 
     log "${INFO} Starting execution..."
@@ -981,6 +989,18 @@ ensure_env() {
 
 doctor() {
     local failed=0
+    # _chk LEVEL "message" ["hint"] — print result, set failed=1 on FAIL
+    _chk() {
+        local icon msg="$2" hint="${3-}"
+        case "$1" in OK) icon="$OK" ;; WARN) icon="$WARN" ;; FAIL)
+            icon="$FAIL"
+            failed=1
+            ;;
+        *) icon="$INFO" ;; esac
+        echo "${icon} ${msg}"
+        [ -n "$hint" ] && echo "    ${hint}"
+        return 0
+    }
 
     echo "=== Host / OS ==="
     local os
@@ -989,44 +1009,28 @@ doctor() {
         echo "${WARN} Cannot read /etc/os-release"
     else
         echo "${INFO} OS: ${os}"
-        if [ "$os" != "ubuntu:22.04" ]; then
-            echo "${WARN} Recommended: ubuntu:22.04 (current: ${os})"
-        else
-            echo "${OK} Ubuntu 22.04 detected"
-        fi
+        [ "$os" = "ubuntu:22.04" ] && _chk OK "Ubuntu 22.04 detected" || _chk WARN "Recommended: ubuntu:22.04 (current: ${os})"
     fi
 
     echo ""
     echo "=== Tools ==="
     for c in bash curl git make python3 sudo; do
         if cmd_exists "$c"; then
-            echo "${OK} ${c} found"
+            _chk OK "${c} found"
         else
-            echo "${FAIL} ${c} not found"
+            local hint=""
             case "$c" in
-            git)
-                echo "    Fix: sudo apt update && sudo apt install -y git"
-                ;;
-            curl)
-                echo "    Fix: sudo apt update && sudo apt install -y curl ca-certificates"
-                ;;
-            python3)
-                echo "    Fix: sudo apt update && sudo apt install -y python3"
-                ;;
-            make)
-                echo "    Fix: sudo apt update && sudo apt install -y make"
-                ;;
-            sudo)
-                echo "    Fix: install sudo (or run as root)"
-                ;;
-            *) ;;
+            git) hint="Fix: sudo apt update && sudo apt install -y git" ;;
+            curl) hint="Fix: sudo apt update && sudo apt install -y curl ca-certificates" ;;
+            python3) hint="Fix: sudo apt update && sudo apt install -y python3" ;;
+            make) hint="Fix: sudo apt update && sudo apt install -y make" ;;
+            sudo) hint="Fix: install sudo (or run as root)" ;;
             esac
-            failed=1
+            _chk FAIL "${c} not found" "$hint"
         fi
     done
     if cmd_exists python3 && ! python3 -m pip --version >/dev/null 2>&1; then
-        echo "${WARN} python3-pip not found (optional, needed for rocker)"
-        echo "    Fix: sudo apt update && sudo apt install -y python3-pip"
+        _chk WARN "python3-pip not found (optional, needed for rocker)" "Fix: sudo apt update && sudo apt install -y python3-pip"
     fi
 
     echo ""
@@ -1034,87 +1038,47 @@ doctor() {
     if cmd_exists docker; then
         echo "${OK} docker found: $(command -v docker)"
         if docker_as_user_ok; then
-            echo "${OK} docker daemon reachable (user)"
+            _chk OK "docker daemon reachable (user)"
         elif docker_as_sudo_ok; then
-            echo "${WARN} docker daemon reachable only via sudo (recommended: add user to docker group)"
+            _chk WARN "docker daemon reachable only via sudo (recommended: add user to docker group)"
         else
-            echo "${FAIL} docker daemon not reachable (is docker running? permissions?)"
-            failed=1
+            _chk FAIL "docker daemon not reachable (is docker running? permissions?)"
         fi
-
-        if docker_compose_run_no_prompt version >/dev/null 2>&1; then
-            echo "${OK} docker compose plugin available"
-        else
-            echo "${FAIL} docker compose plugin not available (install docker-compose-plugin)"
-            failed=1
-        fi
-
-        if in_group docker; then
-            echo "${OK} user is in docker group"
-        else
-            echo "${WARN} user is NOT in docker group (recommended)"
-            echo "    Fix: sudo usermod -aG docker \"$USER\" && newgrp docker"
-        fi
+        docker_compose_run_no_prompt version >/dev/null 2>&1 &&
+            _chk OK "docker compose plugin available" ||
+            _chk FAIL "docker compose plugin not available (install docker-compose-plugin)"
+        in_group docker &&
+            _chk OK "user is in docker group" ||
+            _chk WARN "user is NOT in docker group (recommended)" "Fix: sudo usermod -aG docker \"$USER\" && newgrp docker"
     else
-        echo "${FAIL} docker not found"
-        echo "    Next: ./setup.bash bootstrap"
-        failed=1
+        _chk FAIL "docker not found" "Next: ./setup.bash bootstrap"
     fi
 
     echo ""
     echo "=== Repo ==="
-    if [ -f docker-compose.yml ]; then
-        echo "${OK} docker-compose.yml exists"
-    else
-        echo "${FAIL} docker-compose.yml missing (run from repo root)"
-        failed=1
-    fi
-    if [ -f .env ]; then
-        echo "${OK} .env exists"
-    else
-        echo "${INFO} .env not found (optional)"
-        echo "    Tip: ./setup.bash env   (or: cp .env.example .env)"
-    fi
-    if [ -x ./docker_build.sh ]; then
-        echo "${OK} ./docker_build.sh is executable"
-    else
-        echo "${WARN} ./docker_build.sh not executable"
-        echo "    Fix: chmod +x ./docker_build.sh"
-    fi
-    if cmd_exists git && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        echo "${OK} git repository detected"
-    else
-        echo "${INFO} git repository not detected (optional)"
-        echo "    Tip: clone repository first, then run ./setup.bash doctor"
-    fi
+    [ -f docker-compose.yml ] && _chk OK "docker-compose.yml exists" || _chk FAIL "docker-compose.yml missing (run from repo root)"
+    [ -f .env ] && _chk OK ".env exists" || _chk INFO ".env not found (optional)" "Tip: ./setup.bash env   (or: cp .env.example .env)"
+    [ -x ./docker_build.sh ] && _chk OK "./docker_build.sh is executable" || _chk WARN "./docker_build.sh not executable" "Fix: chmod +x ./docker_build.sh"
+    cmd_exists git && git rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
+        _chk OK "git repository detected" ||
+        _chk INFO "git repository not detected (optional)" "Tip: clone repository first, then run ./setup.bash doctor"
     if cmd_exists docker; then
-        if docker_run_no_prompt image inspect aichallenge-2025-dev >/dev/null 2>&1; then
-            echo "${OK} image exists: aichallenge-2025-dev"
-        else
-            echo "${INFO} image missing: aichallenge-2025-dev"
-            echo "    Next: ./docker_build.sh dev"
-        fi
-        if docker_run_no_prompt image inspect ghcr.io/automotiveaichallenge/autoware-universe:humble-latest >/dev/null 2>&1; then
-            echo "${OK} base image exists: ghcr.io/automotiveaichallenge/autoware-universe:humble-latest"
-        else
-            echo "${INFO} base image not found (will be pulled during build)"
-            echo "    Tip: ./setup.bash pull image"
-        fi
+        docker_run_no_prompt image inspect aichallenge-2025-dev >/dev/null 2>&1 &&
+            _chk OK "image exists: aichallenge-2025-dev" ||
+            _chk INFO "image missing: aichallenge-2025-dev" "Next: ./docker_build.sh dev"
+        docker_run_no_prompt image inspect ghcr.io/automotiveaichallenge/autoware-universe:humble-latest >/dev/null 2>&1 &&
+            _chk OK "base image exists: ghcr.io/automotiveaichallenge/autoware-universe:humble-latest" ||
+            _chk INFO "base image not found (will be pulled during build)" "Tip: ./setup.bash pull image"
     fi
 
     echo ""
     echo "=== AWSIM asset ==="
     local awsim_bin="./aichallenge/simulator/AWSIM/AWSIM.x86_64"
     if [ -f "$awsim_bin" ]; then
-        if [ -x "$awsim_bin" ]; then
-            echo "${OK} AWSIM binary exists and is executable: ${awsim_bin}"
-        else
-            echo "${WARN} AWSIM binary exists but is NOT executable: ${awsim_bin}"
-            echo "    Fix: chmod +x ${awsim_bin}"
-        fi
+        [ -x "$awsim_bin" ] && _chk OK "AWSIM binary: ${awsim_bin}" ||
+            _chk WARN "AWSIM binary NOT executable: ${awsim_bin}" "Fix: chmod +x ${awsim_bin}"
     else
-        echo "${WARN} AWSIM binary not found: ${awsim_bin}"
-        echo "    Next: ./setup.bash download awsim"
+        _chk WARN "AWSIM binary not found: ${awsim_bin}" "Next: ./setup.bash download awsim"
     fi
 
     echo ""
