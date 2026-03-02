@@ -62,6 +62,13 @@ style: |
   .two-col-right {
     grid-column: 2;
   }
+  section.center-all {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+  }
 ---
 
 <!-- _class: title -->
@@ -568,110 +575,63 @@ tail -50 output/latest/d1/autoware.log
 ## 複数台AWSIMアーキテクチャ
 
 ---
+<!-- _header: "Part 3: 複数台AWSIMアーキテクチャ" -->
+<!-- _class: center-all -->
 
-# 複数台走行の実例 — AWSIM 画面
+# 複数台走行の実例
 
-![w:900 center](images/multi-vehicle-racing.png)
+![h:540 center](images/multi-vehicle-movie.png)
 
-**リアルタイム並列実行**
-- 2台の カートが **同時走行**
-- 各台が**独立した Autoware** で制御
-- **Domain ID 1-2** で ROS 通信を分離
+---
+<!-- _header: "Part 3: 複数台AWSIMアーキテクチャ" -->
+
+<!-- _class: center-all -->
+
+# 複数台AWSIMアーキテクチャ
+
+![h:540 center](images/network-architecture.png)
+
+
+
+---
+
+<!-- _class: center-all -->
+
+# domain_bridge
+
+![h:540 center](images/network-architecture.png)
+
+
 
 ---
 
 <!-- _header: "Part 3: 複数台AWSIMアーキテクチャ" -->
 
-# Part 3 はじめに：複数台走行で何が変わる？
-
-### 2025（単台）
-- AWSIM とワークスペースが 1対1
-- Domain ID は固定（デフォルト 1）
-- ログ出力も単一ディレクトリ
-
-### 2026（複数台対応）
-- 同一マシンで **最大4台の Autoware インスタンス**
-- AWSIM 1つで全車両をシミュレート
-- Domain Bridge で 車両ごとに **独立した ROS 通信空間** を実現
-- **評価の並列化** — 複数チームの提出物を同時走行・比較
+# Part 3：1台のPCで複数台対戦
 
 ---
 
-# Domain ID — 通信空間の分離
+<!-- _header: "Part 3: 複数台AWSIMアーキテクチャ" -->
 
-```
-┌──────────────────────────────────────┐
-│          AWSIM (Domain 0)            │
-│      全シミュレーション  & 可視化      │
-└────┬────┬────┬────────────────────────┘
-     │    │    │
-   Domain Bridge
-     │    │    │
-  ┌──▼──┬──▼──┬──▼──┬──────┐
-  │ D1  │ D2  │ D3  │ D4   │  ← 独立した Autoware
-  └──────────────────────────┘
-```
 
-### 仕組み
-- **ROS 2 Domain ID** = ホストごとの通信空間（UDP マルチキャスト）
-- Domain 0（AWSIM） ← → Domain 1-4（Autoware）を **domain_bridge** で中継
-- 各 Autoware は自分の Domain ID 内でのみ通信
+<!-- _class: center-all -->
 
-### 利点
-- 同一マシンで複数カートを動かしても **干渉しない**
-- 複数チームの提出物を **同時評価** 可能
-- ログが Domain ID で自動分離
+# Part 3：複数のPCで複数台対戦
+
+![h:540 center](images/multi-vehicle-final.png)
+
+
 
 ---
 
-# Domain Bridge の役割
+<!-- _header: "Part 3: 複数台AWSIMアーキテクチャ" -->
 
-**Domain 0（AWSIM）** ↔ **Domain 1-4（Autoware）** 間でトピックを中継
 
-```
-Autoware (D1)
-  ├─ 送信: /control/command/control_cmd
-  │   → domain_bridge → AWSIM で /d1/control/command/control_cmd
-  └─ 受信: /vehicle/status/velocity_status
-      ← domain_bridge ← AWSIM から /d1/vehicle/status/velocity_status
-```
+<!-- _class: center-all -->
 
-- 各 Domain の通信空間を **独立させながら**、Autoware と AWSIM 間で **制御・センサ情報を交換**
-- Domain ごとに `d1_bridge`, `d2_bridge`, ... として複数起動
+# Part 3：複数のPCで複数台対戦
 
----
-
-# 複数台の例：2台並列走行
-
-<div class="two-col">
-
-<div class="two-col-left">
-
-```bash
-# ターミナル 1: D1
-DOMAIN_ID=1 make dev
-
-# ターミナル 2: D2
-DOMAIN_ID=2 \
-  make autoware-simulator
-```
-
-### 結果
-- **2台が同時走行**
-- RViz2 で両車両の軌道を表示
-- ログは `d1/` と `d2/` に分離
-
-</div>
-
-<div class="two-col-right">
-
-![w:380 center](images/multi-vehicle-start.png)
-
-**複数台起動直後** — 両カートが初期化・走行開始
-
-</div>
-
-</div>
+![h:540 center](images/multi-vehicle-final.png)
 
 ---
 
