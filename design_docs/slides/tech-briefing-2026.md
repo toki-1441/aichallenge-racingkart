@@ -50,131 +50,153 @@ style: |
     margin-top: 0.3em;
     margin-bottom: 0.3em;
   }
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1em;
+    align-items: center;
+  }
+  .two-col-left {
+    grid-column: 1;
+  }
+  .two-col-right {
+    grid-column: 2;
+  }
 ---
 
 <!-- _class: title -->
 <!-- _header: "" -->
 
 # 技術解説会
-## 来年度大会の変更点概要 & 新コマンド解説
+## 2026 大会の変更点概要 & 新コマンド解説
 
 **自動運転AIチャレンジ 2026**
 
-2026.02.28
+2026.03.02
+
+---
+
+<!-- _class: title -->
+<!-- _header: "" -->
+
+## 👋 セッション構成
+
+### **Part 1** 🔧 できるようになったこと（田中）
+### **Part 2** 📝 新コマンド解説（岩成さん）
+### **Part 3** 🚗 複数台AWSIMアーキテクチャ（久保田さん）
+### **Part 4** 🤖 End-to-End AI の入門（田中(新)さん）
 
 ---
 
 # AWSIM シミュレータの走行画面
 
-![w:780 center](images/awsim-racing-3.png)
+![w:900 center](images/awsim-racing-3.png)
 
-左: AWSIM（3D レーシングカートシミュレータ）/ 右: RViz2（地図・軌道の可視化）
+**AWSIM** + **RViz2** による統合ビュー — 左：3D シミュレータ環境 / 右：地図と軌道の可視化
 
 ---
 
-# 今日のアジェンダ
+<!-- _class: title -->
+<!-- _header: "" -->
 
-### Part 1: 変更点概要
-- 2025 → 2026 で何が変わった？
-- 変更の動機（なぜ変えた？）
-- アーキテクチャ概観 / Domain ID / GPU切替 / ログ / 評価フロー
+# ========== Part 1 開始 ==========
+## 変更点概要 & できるようになったこと
 
-### Part 2: 新コマンド解説
-- `setup.bash` — curl 1行で始まるセットアップ
-- Docker Compose / Makefile — コマンド体系
-- 評価コマンド / 開発ワークフロー
-- よくある詰まりと解決策
+---
+
+# 🎉 2026 でできるようになったこと
+
+### CPU 環境でも快適に開発可能
+- 2025: GPU 必須（NVIDIA ドライバセットアップが大変）
+- **2026**: `.env` の1行で CPU/GPU 切り替え → CPU 環境でも AWSIM が動作
+
+### セットアップが超シンプル
+- 2025: 複数ステップを手動で実行 → 環境差異でハマる人多発
+- **2026**: `curl ... | bash` 1行で完結 → 初心者も迷わない
+
+### 複数台同時走行・評価が実現
+- 2025: 単台のみ / 複数チームの比較は順番に実行
+- **2026**: 最大4台を同時走行 → 公平・高速な評価が可能
+
+### 操作インターフェースが統一・シンプル化
+- 2025: `./docker_run.bash dev` でシェルスクリプト実行
+- **2026**: `make dev` で Makefile 経由（入口が統一されて分かりやすい）
+
+### AWSIM シナリオ機能が大幅拡張
+- **シナリオ作成機能**: GUI で Race Setup パネルからシナリオを設計・保存
+- **起動オプション**: `--vehicles`, `--laps`, `--timeout` など詳細制御が可能
+- **オンライン対戦**: 複数チームがリアルタイムで同一フィールドで競走可能
 
 ---
 
 <!-- _header: "Part 1: 変更点概要" -->
 
-# 2025 → 2026 変更サマリ
+# アーキテクチャ全体像
 
-| 項目 | 2025 | 2026 |
-|------|------|------|
-| コンテナ起動 | `rocker` コマンド | **Docker Compose** |
-| ビルド | ホスト or コンテナ | **コンテナ内のみ** |
-| 複数台同時走行 | 非対応 | **Domain ID で最大4台** |
-| セットアップ | 手動で複数手順 | **`curl ... \| bash` 1行** |
-| GPU/CPU 切替 | 起動オプション | **`.env` の1行** |
-| 評価 | 手動実行 | **`run_evaluation.bash` 一括** |
-| ログ出力 | バラバラ | **`output/<run_id>/d<N>/` に統一** |
-| 操作の入口 | 複数スクリプト | **`make` コマンド** |
+```
+make dev / run_evaluation.bash
+    ↓
+docker compose up
+    ↓
+┌────────────────────────────────────┐
+│  AWSIM (D0)  ←→  Autoware (D1-4)   │
+│ Simulator    domain_bridge Control │
+└────────────────────────────────────┘
+    ↓
+output/<run_id>/d1/, d2/, ...
+  (Logs & Results Auto-Separated)
+```
+
+### 各コンポーネント
+
+- **AWSIM**: 3D レーシングカートシミュレータ（Domain 0）
+- **domain_bridge**: ROS 2 トピック中継（D0 ↔ D1-4）
+- **Autoware**: 自動運転制御（Domain 1-4、最大4台並列）
 
 ---
 
-# 変更の動機
+# Domain ID で通信空間を分離
 
-### rocker の課題
-- 環境差異でハマりやすい（NVIDIA ドライバ、X11、権限...）
-- 複数コンテナの協調が難しい / 「何が動いているか」見えにくい
+```
+AWSIM ROS_DOMAIN_ID=0
+  ↓
+domain_bridge (話題を中継)
+  ↓
+Autoware D1  D2  D3  D4  (各台が独立)
+```
 
-### やりたかったこと
-- **コピペで完結**: 初心者でも迷わない
-- **複数台対応**: 同一マシンで複数カートを並列走行
-- **再現性**: 誰がやっても同じ結果になる環境
-
-### 解決策
-**Docker Compose + Makefile + setup.bash**
-→ 宣言的な構成管理 + 短いコマンド + 自動セットアップ
+- 最大4台を同一マシンで並列走行可能
+- 各台が独立した通信空間 → 干渉なし
+- 結果は Domain ID で自動分離
+- **評価時間が 1/4 に短縮可能**
 
 ---
 
-# アーキテクチャ概観
+<div class="two-col">
 
-```
-┌─── ホスト（あなたのPC）────────────────────────┐
-│                                                  │
-│  make dev / run_evaluation.bash                  │
-│      ↓                                           │
-│  docker compose up                               │
-│      ↓                                           │
-│  ┌──────────────┐    ┌──────────────┐            │
-│  │  simulator   │    │   autoware   │            │
-│  │  (AWSIM)     │◄──►│  (ROS2)     │            │
-│  │  Domain ID=0 │    │  Domain ID=1│            │
-│  └──────────────┘    └──────────────┘            │
-│                                                  │
-│  output/<run_id>/d1/  ← ログ・結果               │
-└──────────────────────────────────────────────────┘
-```
+<div class="two-col-left">
 
-- **ホスト**: `make` / シェルスクリプトを実行するだけ
-- **コンテナ内**: AWSIM・Autoware が動作、ビルドもここ
+## 複数台走行 — Race Setup
 
----
+**GUI パネルで簡単設定：**
 
-# Domain ID による分離
+- **Vehicles**: 1～4台
+- **LiDAR**: ON/OFF
+- **Camera**: ON/OFF
+- **Boosters**: 加速ブースター
+- **Collisions**: 衝突判定
 
-```
-         ┌─────────────────────┐
-         │     AWSIM           │
-         │   ROS_DOMAIN_ID=0   │
-         └──┬───┬───┬───┬──────┘
-            │   │   │   │  domain_bridge
-            ▼   ▼   ▼   ▼
-         ┌──┐ ┌──┐ ┌──┐ ┌──┐
-         │D1│ │D2│ │D3│ │D4│   ← Autoware インスタンス
-         └──┘ └──┘ └──┘ └──┘
-```
+</div>
 
-- **AWSIM** は常に `ROS_DOMAIN_ID=0` で動作
-- **Autoware** は `ROS_DOMAIN_ID=1..4` で起動
-- `domain_bridge` が ID 間のトピックを中継
-- 同一マシンで **最大4台の並列走行** が可能
+<div class="two-col-right">
 
-```bash
-DOMAIN_ID=2 make dev   # 例: Domain ID 2 で起動
-```
+![w:350 center](images/awsim-startup.png)
 
----
+**Race Setup パネル**
 
-# 複数台走行 — 実際の画面
+</div>
 
-![w:780 center](images/multi-vehicle-start.png)
-
-AWSIM の4分割ビュー（2台 x 2カメラ）— 各カートが独立した Autoware で自動走行
+</div>
 
 ---
 
@@ -246,9 +268,17 @@ output/
 
 ---
 
+# 走行開始直後（10秒時点）
+
+![w:900 center](images/awsim-frame-10s.png)
+
+**AWSIM シミュレーション開始** — 両カートが加速・軌道追従を開始、LiDAR が周囲環境を認識
+
+---
+
 # 並列評価 — 複数台が同時に走る
 
-![w:780 center](images/multi-vehicle-racing.png)
+![w:900 center](images/multi-vehicle-racing.png)
 
 `run_parallel_submissions.bash` で2台が同一コースを同時走行中 — RViz2 に2台分の軌道が表示
 
@@ -282,18 +312,45 @@ make down         # 停止
 
 # `make dev` で起動するとこうなる
 
-![w:780 center](images/single-vehicle-running.png)
+![w:850 center](images/single-vehicle-running.png)
 
-`make dev` 実行後のデスクトップ — 左: RViz2 / 右上: AWSIM / 右下: エディタ
+**開発環境の起動** — RViz2（軌道計画可視化） / AWSIM（シミュレーション） / ターミナル（ログ出力）が同時に動作
 
 ---
 
-# AWSIM シナリオ設定
+<div class="two-col">
 
-![w:780 center](images/awsim-frame-10s.png)
+<div class="two-col-left">
 
-AWSIM の UI パネル — ControlModePanel / CapturePanel / View 設定
-コマンドラインで `--vehicles`, `--laps`, `--timeout`, `--start-mode` を制御
+# AWSIM Race インターフェース（お試し版）
+
+![w:900 center](images/multiplay.png)
+
+**複数台リアルタイム競走** — 各カートの速度・周回情報をリアルタイム表示・管理
+
+---
+
+## AWSIM シナリオ設定（お試し版）
+
+</div>
+
+<div class="two-col-right">
+
+![w:350 center](images/scenario.png)
+
+**AWSIM シナリオ設定画面**
+
+</div>
+
+</div>
+
+---
+
+<!-- _class: title -->
+<!-- _header: "" -->
+
+# ========== Part 2 開始 ==========
+## 新コマンド解説
 
 ---
 
@@ -342,105 +399,37 @@ curl | bash → 対話形式で y/N 確認しながら進行
 
 ---
 
-# Docker Compose とは
+# Docker Compose & Makefile
 
-**「`docker run` の設定ファイル版」**
-
-### docker run の課題
-```bash
-# 毎回こんなの打つの...？
-docker run --rm -it --privileged --network host \
-  -v ./output:/output -v ./aichallenge:/aichallenge \
-  -e DISPLAY=$DISPLAY -e ROS_DOMAIN_ID=1 \
-  aichallenge-2025-dev bash -c "..."
-```
-
-### Docker Compose なら
-```yaml
-# docker-compose.yml に書いておけば...
-services:
-  autoware:
-    image: "aichallenge-2025-dev"
-    network_mode: host
-    volumes: [./output:/output, ./aichallenge:/aichallenge]
-```
-```bash
-docker compose up -d autoware   # これだけ！
-```
-
----
-
-# docker-compose.yml の読み方
+### docker-compose.yml（簡潔な構成管理）
 
 ```yaml
-x-autoware-base: &autoware-base    # ← アンカー（共通設定）
+x-autoware-base: &autoware-base
   image: "aichallenge-2025-dev"
   privileged: true
-  pull_policy: never                # ← ローカルイメージのみ使用
   network_mode: host
   volumes: [./output:/output, ./aichallenge:/aichallenge]
 
 services:
-  autoware:                         # ← サービス名
-    <<: *autoware-base              # ← アンカーを展開
-    command: ["bash", "-lc", "..."]
-
-  simulator:
-    <<: *autoware-base
-    command: ["bash", "-lc", "exec /aichallenge/run_simulator.bash ..."]
-
-  autoware-build:
-    <<: *autoware-base
-    command: ["bash", "-lc", "exec bash /aichallenge/build_autoware.bash"]
+  autoware: {<<: *autoware-base, command: "run_autoware.bash"}
+  simulator: {<<: *autoware-base, command: "run_simulator.bash"}
 ```
 
-`&autoware-base` / `*autoware-base` = **YAML アンカー**（コピペ削減）
-
----
-
-# docker-compose.gpu.yml — GPU overlay
-
-```yaml
-x-gpu: &gpu
-  environment:
-    - NVIDIA_VISIBLE_DEVICES=all
-    - NVIDIA_DRIVER_CAPABILITIES=all
-  deploy:
-    resources:
-      reservations:
-        devices:
-          - driver: nvidia
-            count: all
-            capabilities: ["gpu"]
-
-services:
-  autoware:
-    <<: *gpu          # ← autoware に GPU 設定を追加
-  simulator:
-    <<: *gpu          # ← simulator にも
-```
-
-`.env` の `COMPOSE_FILE` でベースとマージ: `COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml`
-
----
-
-# docker_build.sh — イメージビルド
-
-### 開発イメージ
+### GPU 切り替え（.env で制御）
 ```bash
-./docker_build.sh dev
-# → aichallenge-2025-dev イメージを作成（Autoware ベース + ツール追加）
+# GPU を使う
+COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
+
+# CPU のみ（上の行を削除 or コメントアウト）
 ```
 
-### 評価イメージ（提出物を含む）
+### よく使う `make` コマンド
 ```bash
-./create_submit_file.bash              # 提出用 tar を作成
-./docker_build.sh eval --submit <tar>  # 提出物を含むイメージを作成
+make autoware-build    # ROS ワークスペース build
+make dev               # AWSIM + Autoware 起動
+make down              # すべて停止
+./docker_build.sh dev  # イメージビルド
 ```
-
-### ポイント
-- `pull_policy: never` → Docker Hub から pull しない → **先にローカルでビルドが必要**
-- ビルドログ: `output/docker/<timestamp>-docker_build-<pid>.log`
 
 ---
 
@@ -503,7 +492,7 @@ make ps             →  docker compose ps
 
 ---
 
-# AWSIM シナリオモード一覧
+# AWSIM モード一覧
 
 `run_simulator.bash` が AWSIM の起動パラメータを制御:
 
@@ -548,79 +537,264 @@ make down && make autoware-build && make dev
 
 ---
 
-# AWSIM + RViz2 画面
+# AWSIM + RViz2 — 走行画面
 
-![w:780 center](images/awsim-frame-90s.png)
+![w:900 center](images/awsim-frame-90s.png)
 
-Lap 2 走行中 — コース後半のコーナリングシーン（27 km/h）
-
----
-
-# よくある詰まりと解決策
-
-### `pull_policy: never` 的なエラー
-```
-Error: No such image: aichallenge-2025-dev
-```
-→ **`./docker_build.sh dev`** でイメージをビルド
-
-### `.../install/setup.bash` が無い
-```
-bash: /aichallenge/workspace/install/setup.bash: No such file
-```
-→ **`make autoware-build`** でワークスペースをビルド
-
-### とにかく動かなくなった / 環境がおかしい
-→ **`make down`** で全停止 → **`./setup.bash doctor`** で診断
+**Lap 2 走行中** — コース後半のコーナリング / 速度: 27 km/h / 軌道追従を可視化
 
 ---
 
-# よくある詰まりと解決策（続き）
+# 困ったときの対処法
 
-### GPU 関連のエラー
-```
-could not select device driver "nvidia"
-```
-→ `.env` で `COMPOSE_FILE` 行をコメントアウトして CPU モードで確認
+| エラー | 対処 |
+|--------|------|
+| `No such image: aichallenge-2025-dev` | `./docker_build.sh dev` |
+| `No such file: .../install/setup.bash` | `make autoware-build` |
+| GPU エラー (`nvidia driver`) | `.env` で `COMPOSE_FILE` をコメントアウト → CPU 試す |
+| 全般的に動かない | `make down` → `./setup.bash doctor` |
 
-### Domain ID の衝突
-- `make ps` で起動中コンテナを確認 → `make down` で全停止
-
-### ログの確認
+### ログ確認
 ```bash
-ls output/latest/d1/          # 最新の実行結果
 tail -50 output/latest/d1/autoware.log
 ```
 
 ---
 
-<!-- _header: "クロージング" -->
+---
 
-# 参考リンク・ドキュメント
+<!-- _class: title -->
+<!-- _header: "" -->
 
-| ドキュメント | 内容 |
-|-------------|------|
-| `design_docs/introduction.md` | コマンド早見表（初学者向け） |
-| `design_docs/how_to_setup.md` | セットアップ手順 |
-| `design_docs/makefile_target_naming.md` | Makefile 命名規則 |
-| `design_docs/log_design.md` | ログ出力の設計 |
-| `design_docs/run_parallel_submissions.md` | 並列評価の詳細 |
-| `aichallenge/README.md` | スクリプト設計方針 |
-
-### 外部リンク
-- [大会公式サイト](https://www.jsae.or.jp/jaaic/) / [Autoware ドキュメント](https://autowarefoundation.github.io/autoware-documentation/)
+# ========== Part 3 へ ==========
+## 複数台AWSIMアーキテクチャ
 
 ---
 
-# 次のセッション予告
+# 複数台走行の実例 — AWSIM 画面
 
-### AWSIM 複数台アーキテクチャ（久保田）
-- AWSIM 側の複数車両管理の仕組み
-- Domain Bridge の詳細設計 / パフォーマンスチューニング
+![w:900 center](images/multi-vehicle-racing.png)
 
-### E2E AI（新田）
-- End-to-End 自動運転 AI の概要
-- 学習パイプラインの構築 / `ml_workspace/` の使い方
+**リアルタイム並列実行**
+- 2台の カートが **同時走行**
+- 各台が**独立した Autoware** で制御
+- **Domain ID 1-2** で ROS 通信を分離
+
+---
+
+<!-- _header: "Part 3: 複数台AWSIMアーキテクチャ" -->
+
+# Part 3 はじめに：複数台走行で何が変わる？
+
+### 2025（単台）
+- AWSIM とワークスペースが 1対1
+- Domain ID は固定（デフォルト 1）
+- ログ出力も単一ディレクトリ
+
+### 2026（複数台対応）
+- 同一マシンで **最大4台の Autoware インスタンス**
+- AWSIM 1つで全車両をシミュレート
+- Domain Bridge で 車両ごとに **独立した ROS 通信空間** を実現
+- **評価の並列化** — 複数チームの提出物を同時走行・比較
+
+---
+
+# Domain ID — 通信空間の分離
+
+```
+┌──────────────────────────────────────┐
+│          AWSIM (Domain 0)            │
+│      全シミュレーション  & 可視化      │
+└────┬────┬────┬────────────────────────┘
+     │    │    │
+   Domain Bridge
+     │    │    │
+  ┌──▼──┬──▼──┬──▼──┬──────┐
+  │ D1  │ D2  │ D3  │ D4   │  ← 独立した Autoware
+  └──────────────────────────┘
+```
+
+### 仕組み
+- **ROS 2 Domain ID** = ホストごとの通信空間（UDP マルチキャスト）
+- Domain 0（AWSIM） ← → Domain 1-4（Autoware）を **domain_bridge** で中継
+- 各 Autoware は自分の Domain ID 内でのみ通信
+
+### 利点
+- 同一マシンで複数カートを動かしても **干渉しない**
+- 複数チームの提出物を **同時評価** 可能
+- ログが Domain ID で自動分離
+
+---
+
+# Domain Bridge の役割
+
+**Domain 0（AWSIM）** ↔ **Domain 1-4（Autoware）** 間でトピックを中継
+
+```
+Autoware (D1)
+  ├─ 送信: /control/command/control_cmd
+  │   → domain_bridge → AWSIM で /d1/control/command/control_cmd
+  └─ 受信: /vehicle/status/velocity_status
+      ← domain_bridge ← AWSIM から /d1/vehicle/status/velocity_status
+```
+
+- 各 Domain の通信空間を **独立させながら**、Autoware と AWSIM 間で **制御・センサ情報を交換**
+- Domain ごとに `d1_bridge`, `d2_bridge`, ... として複数起動
+
+---
+
+# 複数台の例：2台並列走行
+
+<div class="two-col">
+
+<div class="two-col-left">
+
+```bash
+# ターミナル 1: D1
+DOMAIN_ID=1 make dev
+
+# ターミナル 2: D2
+DOMAIN_ID=2 \
+  make autoware-simulator
+```
+
+### 結果
+- **2台が同時走行**
+- RViz2 で両車両の軌道を表示
+- ログは `d1/` と `d2/` に分離
+
+</div>
+
+<div class="two-col-right">
+
+![w:380 center](images/multi-vehicle-start.png)
+
+**複数台起動直後** — 両カートが初期化・走行開始
+
+</div>
+
+</div>
+
+---
+
+<!-- _class: title -->
+<!-- _header: "" -->
+
+# ========== Part 4 開始 ==========
+## End-to-End AI の入門
+
+---
+
+<!-- _header: "Part 4: E2E AI の入門" -->
+
+# Part 4 はじめに：E2E AI とは
+
+### 従来的アプローチ（パイプライン）
+```
+センサ → 認識 → 計画 → 制御 → 実行
+  (各ステップが独立したモジュール)
+```
+
+### E2E（End-to-End）アプローチ
+```
+センサ → ニューラルネット → 制御
+  (入力から出力までを一度に学習)
+```
+
+### AI チャレンジでの E2E AI
+**TinyLiDARNet** — LiDAR スキャン画像から直接 **操舵角 + 加速度** を出力するニューラルネット
+
+---
+
+# TinyLiDARNet の構造
+
+```
+入力: LiDAR スキャン（1080点）
+  ↓
+正規化・前処理
+  ↓
+small CNN（アーキテクチャ: tiny）
+  ├─ Conv1d（カーネル: 3）
+  ├─ ReLU
+  └─ Linear（隠れ層: 64）
+  ↓
+出力層: 2 ユニット（操舵角, 加速度）
+  ↓
+制御信号 → Autoware 互換形式で AWSIM へ
+```
+
+### パラメータ数
+- わずか **~5k parameters** — エッジデバイスでの推論が可能
+- 推論時間: **< 50ms** （ROS 2 ノードとして実行）
+
+---
+
+# TinyLiDARNet の学習フロー
+
+```bash
+# 1. データ収集
+cd aichallenge/ml_workspace
+./record_data.bash
+
+# 2. データ抽出（rosbag → CSV）
+python tiny_lidar_net/extract_data_from_bag.py \
+  --bags-dir ./rawdata --outdir ./datasets
+
+# 3. モデル学習
+python tiny_lidar_net/train_tiny_lidar_net.py \
+  --train-data datasets/train.csv --epochs 100
+
+# 4. 推論実行
+ros2 launch tiny_lidar_net_controller tiny_lidar_net.launch.xml
+```
+
+### コンテスト戦略
+1. **Week 1-2**: Pure Pursuit で基盤構築
+2. **Week 3-4**: データ収集（TinyLiDARNet 学習用）
+3. **Week 5-8**: モデル開発・最適化
+4. **Week 9-10**: 最終調整・提出
+
+---
+
+<!-- _header: "クロージング" -->
+
+# セッション全体のまとめ
+
+### Part 1: 変更点概要 & できるようになったこと
+- CPU 環境でも AWSIM が動作 / `curl` 1行でセットアップ
+- Docker Compose で統一 / 複数台対応
+
+### Part 2: 新コマンド解説
+- `setup.bash doctor` で環境診断
+- `make dev` / `./run_evaluation.bash` で完結
+
+### Part 3: 複数台アーキテクチャ
+- Domain ID で最大4台の並列走行
+- domain_bridge で通信空間を分離・中継
+
+### Part 4: E2E AI
+- TinyLiDARNet で NN ベース制御を実装
+- `ml_workspace/` で学習パイプラインをカスタマイズ可能
+
+---
+
+<!-- _class: title -->
+<!-- _header: "" -->
+
+# 🎯 次のステップ
+
+```bash
+# 1. セットアップ
+curl -fsSL "https://raw.githubusercontent.com/\
+AutomotiveAIChallenge/aichallenge-racingkart/\
+main/setup.bash" | bash
+
+# 2. 環境診断
+./setup.bash doctor
+
+# 3. 開発開始
+make dev
+```
 
 ---
 
@@ -633,6 +807,6 @@ tail -50 output/latest/d1/autoware.log
 
 ---
 
-リポジトリ: `github.com/AutomotiveAIChallenge/aichallenge-racingkart`
+# 参考リソース
 
-まずは `./setup.bash doctor` から始めてみてください
+- **リポジトリ**: `github.com/AutomotiveAIChallenge/aichallenge-racingkart`
