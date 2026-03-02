@@ -249,8 +249,7 @@ output/
 
 ### 単体評価（1台）
 ```bash
-./run_evaluation.bash        # 起動→待機→走行→結果収集→停止
-./run_evaluation.bash test   # 短いスモークテスト
+make eval        # 起動→待機→走行→結果収集→停止
 ```
 
 ### 並列評価（複数提出物を同時走行）
@@ -303,7 +302,7 @@ make dev          # 起動
 make down         # 停止
 
 # 評価
-./run_evaluation.bash
+make eval
 ```
 
 **3コマンドで開発開始、1コマンドで評価完了**
@@ -464,8 +463,7 @@ make ps             →  docker compose ps
 | `make dev` | AWSIM + Autoware を起動 | 手元でデバッグしたい時 |
 | `make ps` | 起動中コンテナを一覧表示 | 「動いてる？」確認 |
 | `make down` | コンテナを停止・片付け | 終了時 / 詰まった時 |
-| `./run_evaluation.bash` | 単独走行の評価を実行 | 評価を回したい時 |
-| `./run_evaluation.bash test` | スモークテスト | まず動くか確認 |
+| `make eval` | 単独走行の評価を実行 | 評価を回したい時 |
 | `make rviz2` | RViz2 で可視化 | 軌道・点群を見たい時 |
 
 ---
@@ -474,7 +472,7 @@ make ps             →  docker compose ps
 
 ### 単体評価
 ```bash
-./run_evaluation.bash
+make eval
 # 内部で docker compose up → 走行 → 結果収集 → docker compose down
 ```
 
@@ -532,7 +530,7 @@ make dev
 make down && make autoware-build && make dev
 
 # 6. 評価
-./run_evaluation.bash
+make eval
 ```
 
 ---
@@ -766,7 +764,7 @@ ros2 launch tiny_lidar_net_controller tiny_lidar_net.launch.xml
 
 ### Part 2: 新コマンド解説
 - `setup.bash doctor` で環境診断
-- `make dev` / `./run_evaluation.bash` で完結
+- `make dev` / `make eval` で完結
 
 ### Part 3: 複数台アーキテクチャ
 - Domain ID で最大4台の並列走行
