@@ -578,7 +578,7 @@ tail -50 output/latest/d1/autoware.log
 <!-- _header: "Part 3: 複数台AWSIMアーキテクチャ" -->
 <!-- _class: center-all -->
 
-# 複数台走行の実例
+# 複数台走行の様子
 
 ![h:540 center](images/multi-vehicle-movie.png)
 
@@ -589,26 +589,29 @@ tail -50 output/latest/d1/autoware.log
 
 # 複数台AWSIMアーキテクチャ
 
+![h:540 center](images/network-architecture2.png)
+
+---
+
+
+<!-- _header: "Part 3: 複数台AWSIMアーキテクチャ" -->
+<!-- _class: center-all -->
+
+# 1台のPCで複数台対戦
+
+![h:540 center](images/network-architecture3.png)
+
+---
+
+<!-- _header: "Part 3: 複数台AWSIMアーキテクチャ" -->
+
+
+<!-- _class: center-all -->
+
+# 複数のPCで複数台対戦
+
 ![h:540 center](images/network-architecture.png)
 
-
-
----
-
-<!-- _class: center-all -->
-
-# domain_bridge
-
-![h:540 center](images/network-architecture.png)
-
-
-
----
-
-<!-- _header: "Part 3: 複数台AWSIMアーキテクチャ" -->
-
-# Part 3：1台のPCで複数台対戦
-
 ---
 
 <!-- _header: "Part 3: 複数台AWSIMアーキテクチャ" -->
@@ -616,20 +619,7 @@ tail -50 output/latest/d1/autoware.log
 
 <!-- _class: center-all -->
 
-# Part 3：複数のPCで複数台対戦
-
-![h:540 center](images/multi-vehicle-final.png)
-
-
-
----
-
-<!-- _header: "Part 3: 複数台AWSIMアーキテクチャ" -->
-
-
-<!-- _class: center-all -->
-
-# Part 3：複数のPCで複数台対戦
+# シミュレーション大会決勝イメージ
 
 ![h:540 center](images/multi-vehicle-final.png)
 
