@@ -3,6 +3,7 @@
     <arg name="simulation"/>
     <arg name="use_sim_time"/>
     <arg name="run_rviz"/>
+    <arg name="run_route_visualizer" default="true"/>
     <arg name="sensor_model" default="racing_kart_sensor_kit"/>
     <arg name="launch_vehicle_interface" default="true"/>
     <arg name="capture" default="false"/>
@@ -37,6 +38,15 @@
     <!-- Visualization. -->
     <group if="$(var run_rviz)">
         <node pkg="rviz2" exec="rviz2" name="rviz2" output="screen" args="-d $(var rviz_config) -s $(find-pkg-share aichallenge_system_launch)/rviz/image/autoware.png"/>
+    </group>
+
+    <!-- Safety System -->
+    <group>
+        <push-ros-namespace namespace="safety"/>
+        <node pkg="aichallenge_system_launch" exec="route_safety_monitor.py" name="route_safety_monitor" output="screen"/>
+        <group if="$(var run_route_visualizer)">
+            <node pkg="aichallenge_system_launch" exec="route_safety_visualizer.py" name="route_safety_visualizer" output="screen"/>
+        </group>
     </group>
 
     <!-- Initial Pose -->

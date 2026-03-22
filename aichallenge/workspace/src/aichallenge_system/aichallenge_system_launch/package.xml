@@ -5,6 +5,7 @@
   <description>The aichallenge_system_launch package</description>
 
   <maintainer email="isamu.takagi@tier4.jp">Takagi Isamu</maintainer>
+  <maintainer email="taiki.tanaka@tier4.jp">Taiki Tanaka</maintainer>
   <license>Apache License 2.0</license>
 
   <buildtool_depend>ament_cmake_auto</buildtool_depend>
@@ -17,6 +18,9 @@
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>topic_tools</exec_depend>
   <exec_depend>python3-plotly</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <!-- used in config/domain/vehicle_bridge_config.yaml.in for domain_bridge -->
+  <exec_depend>autoware_auto_control_msgs</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>autoware_lint_common</test_depend>

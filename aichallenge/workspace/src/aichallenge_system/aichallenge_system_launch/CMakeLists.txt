@@ -38,7 +38,9 @@ install(PROGRAMS
   script/control_mode_adapter.py
   script/object_marker.py
   script/motion_analytics.py
+  script/route_safety_monitor.py
+  script/route_safety_visualizer.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
-ament_auto_package(INSTALL_TO_SHARE launch config)
+ament_auto_package(INSTALL_TO_SHARE launch config map)
