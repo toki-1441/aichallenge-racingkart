@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 cd /aichallenge/ml_workspace/pilot_net
 
 BAG_DIR="${1:?Usage: run_pipeline.bash <bag_dir>}"
@@ -18,9 +18,14 @@ python3 prepare_data.py
 
 echo "=== 3. Train ==="
 rm -rf checkpoints logs
-trap 'echo "Training interrupted, continuing pipeline..."' INT
-python3 train.py train.num_workers=0 +train.loss_type=mse || true
+trap 'echo "Training interrupted."; exit 130' INT
+python3 train.py train.num_workers=0 +train.loss_type=mse
 trap - INT
+
+if [ ! -f ./checkpoints/best_model.pth ]; then
+    echo "[ERROR] Training did not produce ./checkpoints/best_model.pth"
+    exit 1
+fi
 
 echo "=== 4. Convert weights ==="
 python3 convert_weight.py \

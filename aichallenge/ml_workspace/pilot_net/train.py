@@ -94,7 +94,15 @@ def main(cfg: DictConfig):
         )
         print(f"[INFO] Using WeightedSmoothL1Loss")
     optimizer = optim.Adam(model.parameters(), lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
+    # PyTorch compatibility: some versions removed the `verbose` kwarg.
+    try:
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=0.5, patience=5, verbose=True
+        )
+    except TypeError:
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=0.5, patience=5
+        )
 
     # === Logging & Save dirs ===
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
