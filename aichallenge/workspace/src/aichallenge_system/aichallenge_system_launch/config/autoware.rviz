@@ -16,9 +16,18 @@ Panels:
         - /Control1/PointStamped1/Topic1
         - /Vehicle1
         - /V2X1
-        - /V2X1/GNSS1/Topic1
-        - /V2X1/GNSS1/Covariance1
-        - /V2X1/GNSS1/Covariance1/Position1
+        - /V2X1/D11/Topic1
+        - /V2X1/D11/Covariance1
+        - /V2X1/D11/Covariance1/Position1
+        - /V2X1/D21/Topic1
+        - /V2X1/D21/Covariance1
+        - /V2X1/D21/Covariance1/Position1
+        - /V2X1/D31/Topic1
+        - /V2X1/D31/Covariance1
+        - /V2X1/D31/Covariance1/Position1
+        - /V2X1/D41/Topic1
+        - /V2X1/D41/Covariance1
+        - /V2X1/D41/Covariance1/Position1
       Splitter Ratio: 0.5737704634666443
     Tree Height: 470
   - Class: rviz_common/Views
@@ -324,7 +333,10 @@ Visualization Manager:
               Value: false
               VehicleModel: true
             V2X:
-              GNSS: true
+              D1: true
+              D2: true
+              D3: true
+              D4: true
               Value: false
             Value: true
             Vehicle:
@@ -532,7 +544,7 @@ Visualization Manager:
           Axes Length: 0
           Axes Radius: 0
           Class: rviz_default_plugins/PoseWithCovariance
-          Color: 255; 25; 0
+          Color: 255; 80; 0
           Covariance:
             Orientation:
               Alpha: 0.5
@@ -544,14 +556,14 @@ Visualization Manager:
               Value: false
             Position:
               Alpha: 0.30000001192092896
-              Color: 204; 51; 204
+              Color: 255; 80; 0
               Scale: 0.4000000059604645
               Value: true
             Value: true
           Enabled: true
           Head Length: 0
           Head Radius: 0
-          Name: GNSS
+          Name: D1
           Shaft Length: 0
           Shaft Radius: 0
           Shape: Arrow
@@ -561,7 +573,112 @@ Visualization Manager:
             Filter size: 10
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /v2x/gnss/pose_with_covariance
+            Value: /v2x/d1/gnss/pose_with_covariance
+          Value: true
+        - Alpha: 0
+          Axes Length: 0
+          Axes Radius: 0
+          Class: rviz_default_plugins/PoseWithCovariance
+          Color: 0; 180; 255
+          Covariance:
+            Orientation:
+              Alpha: 0.5
+              Color: 255; 255; 127
+              Color Style: Unique
+              Frame: Local
+              Offset: 1
+              Scale: 1
+              Value: false
+            Position:
+              Alpha: 0.30000001192092896
+              Color: 0; 180; 255
+              Scale: 0.4000000059604645
+              Value: true
+            Value: true
+          Enabled: true
+          Head Length: 0
+          Head Radius: 0
+          Name: D2
+          Shaft Length: 0
+          Shaft Radius: 0
+          Shape: Arrow
+          Topic:
+            Depth: 10
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /v2x/d2/gnss/pose_with_covariance
+          Value: true
+        - Alpha: 0
+          Axes Length: 0
+          Axes Radius: 0
+          Class: rviz_default_plugins/PoseWithCovariance
+          Color: 0; 220; 80
+          Covariance:
+            Orientation:
+              Alpha: 0.5
+              Color: 255; 255; 127
+              Color Style: Unique
+              Frame: Local
+              Offset: 1
+              Scale: 1
+              Value: false
+            Position:
+              Alpha: 0.30000001192092896
+              Color: 0; 220; 80
+              Scale: 0.4000000059604645
+              Value: true
+            Value: true
+          Enabled: true
+          Head Length: 0
+          Head Radius: 0
+          Name: D3
+          Shaft Length: 0
+          Shaft Radius: 0
+          Shape: Arrow
+          Topic:
+            Depth: 10
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /v2x/d3/gnss/pose_with_covariance
+          Value: true
+        - Alpha: 0
+          Axes Length: 0
+          Axes Radius: 0
+          Class: rviz_default_plugins/PoseWithCovariance
+          Color: 220; 220; 0
+          Covariance:
+            Orientation:
+              Alpha: 0.5
+              Color: 255; 255; 127
+              Color Style: Unique
+              Frame: Local
+              Offset: 1
+              Scale: 1
+              Value: false
+            Position:
+              Alpha: 0.30000001192092896
+              Color: 220; 220; 0
+              Scale: 0.4000000059604645
+              Value: true
+            Value: true
+          Enabled: true
+          Head Length: 0
+          Head Radius: 0
+          Name: D4
+          Shaft Length: 0
+          Shaft Radius: 0
+          Shape: Arrow
+          Topic:
+            Depth: 10
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /v2x/d4/gnss/pose_with_covariance
           Value: true
       Enabled: true
       Name: V2X

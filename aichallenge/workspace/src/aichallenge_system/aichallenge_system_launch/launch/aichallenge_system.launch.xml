@@ -63,6 +63,8 @@
         <node pkg="domain_bridge" exec="domain_bridge" name="vehicle_domain_bridge" output="screen"
             args="--from $(var domain_id) --to 0 $(find-pkg-share aichallenge_system_launch)/config/domain/d$(var domain_id)_bridge_config.yaml">
         </node>
-        <include file="$(find-pkg-share aichallenge_system_launch)/launch/mode/v2x.launch.xml"/>
+        <include file="$(find-pkg-share aichallenge_system_launch)/launch/mode/v2x.launch.xml">
+            <arg name="domain_id" value="$(var domain_id)"/>
+        </include>
     </group>
 </launch>

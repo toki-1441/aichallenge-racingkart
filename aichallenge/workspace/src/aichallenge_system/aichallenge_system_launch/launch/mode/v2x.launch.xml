@@ -1,16 +1,60 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <launch>
-  <!-- V2X -->
+  <arg name="domain_id"/>
+  <!-- V2X: one gnss_poser per other vehicle domain -->
   <group>
     <push-ros-namespace namespace="v2x"/>
-    <group>
-      <push-ros-namespace namespace="gnss"/>
-      <include file="$(find-pkg-share racing_kart_gnss_poser)/launch/gnss_poser.launch.xml">
-        <arg name="input_topic_fix" value="nav_sat_fix"/>
-        <arg name="output_topic_gnss_pose" value="pose"/>
-        <arg name="output_topic_gnss_fixed" value="gnss_fixed"/>
-        <arg name="output_topic_gnss_pose_cov" value="pose_with_covariance"/>
-      </include>
+    <group unless="$(eval $(var domain_id)==1)">
+      <push-ros-namespace namespace="d1"/>
+      <group>
+        <push-ros-namespace namespace="gnss"/>
+        <include file="$(find-pkg-share racing_kart_gnss_poser)/launch/gnss_poser.launch.xml">
+          <arg name="input_topic_fix" value="nav_sat_fix"/>
+          <arg name="output_topic_gnss_pose" value="pose"/>
+          <arg name="output_topic_gnss_fixed" value="gnss_fixed"/>
+          <arg name="output_topic_gnss_pose_cov" value="pose_with_covariance"/>
+          <arg name="gnss_base_frame" value="d1_gnss_base_link"/>
+        </include>
+      </group>
+    </group>
+    <group unless="$(eval $(var domain_id)==2)">
+      <push-ros-namespace namespace="d2"/>
+      <group>
+        <push-ros-namespace namespace="gnss"/>
+        <include file="$(find-pkg-share racing_kart_gnss_poser)/launch/gnss_poser.launch.xml">
+          <arg name="input_topic_fix" value="nav_sat_fix"/>
+          <arg name="output_topic_gnss_pose" value="pose"/>
+          <arg name="output_topic_gnss_fixed" value="gnss_fixed"/>
+          <arg name="output_topic_gnss_pose_cov" value="pose_with_covariance"/>
+          <arg name="gnss_base_frame" value="d2_gnss_base_link"/>
+        </include>
+      </group>
+    </group>
+    <group unless="$(eval $(var domain_id)==3)">
+      <push-ros-namespace namespace="d3"/>
+      <group>
+        <push-ros-namespace namespace="gnss"/>
+        <include file="$(find-pkg-share racing_kart_gnss_poser)/launch/gnss_poser.launch.xml">
+          <arg name="input_topic_fix" value="nav_sat_fix"/>
+          <arg name="output_topic_gnss_pose" value="pose"/>
+          <arg name="output_topic_gnss_fixed" value="gnss_fixed"/>
+          <arg name="output_topic_gnss_pose_cov" value="pose_with_covariance"/>
+          <arg name="gnss_base_frame" value="d3_gnss_base_link"/>
+        </include>
+      </group>
+    </group>
+    <group unless="$(eval $(var domain_id)==4)">
+      <push-ros-namespace namespace="d4"/>
+      <group>
+        <push-ros-namespace namespace="gnss"/>
+        <include file="$(find-pkg-share racing_kart_gnss_poser)/launch/gnss_poser.launch.xml">
+          <arg name="input_topic_fix" value="nav_sat_fix"/>
+          <arg name="output_topic_gnss_pose" value="pose"/>
+          <arg name="output_topic_gnss_fixed" value="gnss_fixed"/>
+          <arg name="output_topic_gnss_pose_cov" value="pose_with_covariance"/>
+          <arg name="gnss_base_frame" value="d4_gnss_base_link"/>
+        </include>
+      </group>
     </group>
   </group>
 </launch>

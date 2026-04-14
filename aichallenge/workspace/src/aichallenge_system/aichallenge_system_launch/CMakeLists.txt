@@ -18,7 +18,7 @@ foreach(FROM_DOMAIN RANGE 1 4)
       string(APPEND V2X_OTHER_GNSS_TOPICS
         "  d${_other_domain}/sensing/gnss/nav_sat_fix:\n"
         "    type: sensor_msgs/msg/NavSatFix\n"
-        "    remap: /v2x/gnss/nav_sat_fix\n"
+        "    remap: /v2x/d${_other_domain}/gnss/nav_sat_fix\n"
         "    reversed: True\n"
         "\n"
       )
