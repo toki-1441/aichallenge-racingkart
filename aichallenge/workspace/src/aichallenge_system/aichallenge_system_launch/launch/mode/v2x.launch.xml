@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <launch>
-  <arg name="domain_id"/>
+  <arg name="domain_id" default="1"/>
   <!-- V2X: one gnss_poser per other vehicle domain -->
   <group>
     <push-ros-namespace namespace="v2x"/>
