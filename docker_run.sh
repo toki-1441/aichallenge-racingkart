@@ -5,7 +5,7 @@ device="${2}"
 device_drivers="/dev/dri"
 
 case "${target}" in
-"eval")
+"eval" | "parallel")
     volume="output:/output /run/user:/run/user:rw"
     ;;
 "dev")
@@ -17,7 +17,7 @@ case "${target}" in
     exit 1
     ;;
 *)
-    echo "invalid argument (use 'dev' or 'eval')"
+    echo "invalid argument (use 'dev', 'eval', or 'parallel')"
     exit 1
     ;;
 esac
@@ -41,5 +41,9 @@ LOG_FILE="output/docker/${ts}-docker_run-$$.log"
 mkdir -p output/docker output/latest
 ln -sfn "${PWD}/${LOG_FILE}" output/latest/docker_run.log
 
+# dev: interactive bash, eval/parallel: run Dockerfile CMD
+run_args=("aichallenge-2025-${target}")
+[ "${target}" = "dev" ] && run_args+=("bash")
+
 # shellcheck disable=SC2086
-rocker ${opts} --x11 --devices ${device_drivers} --user --pulse --net host --privileged --name "aichallenge-2025-$(date "+%Y-%m-%d-%H-%M-%S")" --volume ${volume} -- "aichallenge-2025-${target}" bash 2>&1 | tee "$LOG_FILE"
+rocker ${opts} --x11 --devices ${device_drivers} --user --pulse --net host --privileged --name "aichallenge-2025-$(date "+%Y-%m-%d-%H-%M-%S")" --volume ${volume} -- "${run_args[@]}" 2>&1 | tee "$LOG_FILE"
