@@ -19,7 +19,7 @@
             name="aichallenge_awsim_eval"
             cwd="$(var log_dir)"
             output="both"
-            cmd="/aichallenge/simulator/AWSIM/AWSIM.x86_64 --vehicles $(var vehicles) --npcs 0 --laps $(var laps) --timeout $(var timeout) --boosts 2 --start-mode sync --start-count-seconds 5 --collisions on --ranking on --sound off"/>
+            cmd="/aichallenge/simulator/AWSIM/AWSIM.x86_64 --vehicles $(var vehicles) --npcs 0 --laps $(var laps) --timeout $(var timeout) --boosts 2 --start-mode sync --start-count-seconds 5 --collisions off --ranking on --sound off"/>
 
         <include file="$(find-pkg-share aichallenge_system_launch)/launch/mode/awsim_state_manager.launch.xml"/>
     </group>
