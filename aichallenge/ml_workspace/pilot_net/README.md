@@ -2,7 +2,6 @@
 
 [NVIDIA PilotNet (DAVE-2)](https://arxiv.org/abs/1604.07316) 用のデータ抽出・学習・デプロイコード。
 
-- 詳細な step-by-step は [develop_pilot_net.md](https://automotiveaichallenge.github.io/aichallenge-documentation-racingkart/ml_sample/develop_pilot_net.html) を参照
 - ROS 推論ノードは [pilot_net_controller](../../workspace/src/aichallenge_submit/pilot_net_controller) を参照
 
 ## 学習用データの作成
