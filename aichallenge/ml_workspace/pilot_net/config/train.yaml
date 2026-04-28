@@ -7,7 +7,7 @@ model:
   image_width: 200
   output_dim: 2
   color_space: yuv        # "rgb" or "yuv"
-  crop_top_ratio: 0.375   # fraction of image height to crop from top
+  crop_top_ratio: 0.0     # crop is now applied at extract time
   crop_bottom_ratio: 0.0  # fraction of image height to crop from bottom
 
 train:
