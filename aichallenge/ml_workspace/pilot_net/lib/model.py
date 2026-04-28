@@ -9,7 +9,7 @@ class PilotNet(nn.Module):
     Architecture: Conv5 + FC4, linear output (no activation).
     """
 
-    def __init__(self, image_height=256, image_width=384, output_dim=2):
+    def __init__(self, image_height=66, image_width=200, output_dim=2):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 24, kernel_size=5, stride=2)
         self.conv2 = nn.Conv2d(24, 36, kernel_size=5, stride=2)
