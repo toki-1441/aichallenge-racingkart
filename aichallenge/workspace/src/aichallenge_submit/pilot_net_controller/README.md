@@ -4,6 +4,8 @@ NVIDIA PilotNet (DAVE-2) アーキテクチャに基づくカメラ画像 End-to
 
 フロントカメラの RGB 画像から直接 `AckermannControlCommand` (加速度 + 操舵角) を出力する。MPC エキスパートからの模倣学習で訓練し、NumPy のみで推論を行う。
 
+> **学習〜デプロイの step-by-step 手順は [develop_pilot_net.md](https://automotiveaichallenge.github.io/aichallenge-documentation-racingkart/ml_sample/develop_pilot_net.html) を参照。** 本 README は技術仕様 (アーキテクチャ・パラメータ・I/O) のみ。
+
 ## Reference
 
 > Bojarski, M., Del Testa, D., Dworakowski, D., Firner, B., Flepp, B., Goyal, P., Jackel, L.D., Monfort, M., Muller, U., Zhang, J., Zhang, X., Zhao, J., & Zieba, K. (2016).
