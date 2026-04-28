@@ -23,8 +23,8 @@ class PilotNetCore:
 
     def __init__(
         self,
-        image_height: int = 256,
-        image_width: int = 384,
+        image_height: int = 66,
+        image_width: int = 200,
         output_dim: int = 2,
         ckpt_path: str = '',
         acceleration: float = 0.1,
