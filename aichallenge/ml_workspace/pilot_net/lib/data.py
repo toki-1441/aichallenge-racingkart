@@ -27,8 +27,8 @@ class ImageControlSequenceDataset(Dataset):
     def __init__(
         self,
         seq_dir: Union[str, Path],
-        image_height: int = 256,
-        image_width: int = 384,
+        image_height: int = 66,
+        image_width: int = 200,
         training: bool = False,
         color_space: str = "rgb",
         crop_top_ratio: float = 0.0,
@@ -163,8 +163,8 @@ class MultiSeqConcatDataset(Dataset):
     def __init__(
         self,
         dataset_root: Union[str, Path],
-        image_height: int = 256,
-        image_width: int = 384,
+        image_height: int = 66,
+        image_width: int = 200,
         include: Optional[List[str]] = None,
         exclude: Optional[List[str]] = None,
         training: bool = False,
