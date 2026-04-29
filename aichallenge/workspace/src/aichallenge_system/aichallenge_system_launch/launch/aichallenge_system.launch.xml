@@ -3,7 +3,7 @@
     <arg name="simulation"/>
     <arg name="use_sim_time"/>
     <arg name="run_rviz"/>
-    <arg name="sensor_model" default="racing_kart_sensor_kit"/>
+    <arg name="vehicle_model" default="racing_kart" description="vehicle model name (racing_kart or lexus)"/>
     <arg name="launch_vehicle_interface" default="true"/>
     <arg name="capture" default="false"/>
     <arg name="rosbag" default="false"/>
@@ -19,7 +19,7 @@
     <log message="The arguments for aichallenge_system_launch."/>
     <log message=" - simulation: $(var simulation)"/>
     <log message=" - use_sim_time: $(var use_sim_time)"/>
-    <log message=" - sensor_model: $(var sensor_model)"/>
+    <log message=" - vehicle_model: $(var vehicle_model)"/>
     <log message=" - launch_vehicle_interface: $(var launch_vehicle_interface)"/>
     <log message=" - rviz config: $(var rviz_config)"/>
     <log message=" - capture: $(var capture)"/>
@@ -30,7 +30,7 @@
     <include file="$(find-pkg-share aichallenge_submit_launch)/launch/aichallenge_submit.launch.xml" >
         <arg name="simulation" value="$(var simulation)"/>
         <arg name="use_sim_time" value="$(var use_sim_time)"/>
-        <arg name="sensor_model" value="$(var sensor_model)"/>
+        <arg name="vehicle_model" value="$(var vehicle_model)"/>
         <arg name="launch_vehicle_interface" value="$(var launch_vehicle_interface)"/>
     </include>
 
