@@ -1,5 +1,6 @@
 # TODO: 実機キャリブレーション値で置換すること。
-# 現状は racing_kart_sensor_kit の値を Lexus の wheel_base 比 (2.79/1.087) で線形スケールした初期値。
+# 現状は Lexus 車体寸法 (wheel_base=2.79, front_overhang=1.0, vehicle_height=2.5) を踏まえた
+# 屋根中央付近の placeholder。RViz 表示と TF が破綻しない範囲に収めているが、実車計測まで信頼してはいけない。
 base_link:
   sensor_kit_base_link:
     x: 1.395  # = wheel_base / 2.0 (Lexus 車両中央)
@@ -9,16 +10,16 @@ base_link:
     pitch: 0.0
     yaw: 0.0
   camera_link:
-    x: 2.054  # kart 0.8 を wheel_base 比でスケール
+    x: 1.5  # 屋根前方 (車体内)
     y: 0.0
-    z: 0.7
+    z: 2.2  # vehicle_height 2.5 - マージン
     roll: 0.0
     pitch: 0.0
     yaw: 0.0
   lidar_link:
-    x: 4.236  # kart 1.65 を wheel_base 比でスケール
+    x: 1.395  # 屋根中央 (= wheel_base / 2.0)
     y: 0.0
-    z: 0.0
+    z: 2.2  # vehicle_height 2.5 - マージン
     roll: 0.0
     pitch: 0.0
     yaw: 0.0
