@@ -3,6 +3,8 @@
 走行経路（`autoware_auto_planning_msgs/Trajectory`）を入力に、BERT-tiny ベースの VelocityFormer で
 速度・ステアリングを推論し、`AckermannControlCommand` をパブリッシュする ROS 2 ノードです。
 
+> **学習〜デプロイの step-by-step 手順は [develop_velocity_former.md](https://automotiveaichallenge.github.io/aichallenge-documentation-racingkart/ml_sample/develop_velocity_former.html) を参照。** 本 README は技術仕様 (アーキテクチャ・パラメータ・I/O) のみ。
+
 学習スクリプト・データ抽出は
 [`aichallenge/ml_workspace/velocity_former`](../../../../ml_workspace/velocity_former) を参照してください。
 
