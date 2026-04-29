@@ -22,6 +22,7 @@ TOPICS=(
     "/awsim/control_cmd"
     "/control/command/actuation_cmd"
     "/control/command/control_cmd"
+    "/planning/scenario_planning/trajectory"
     "/sensing/camera/image_raw"
     "/sensing/lidar/scan"
 )
