@@ -1,0 +1,19 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build artifacts
+build/
+install/
+log/
+
+# Checkpoints (large; keep externally)
+ckpt/*.onnx
+ckpt/*.pth
+ckpt/*.npy
+!ckpt/.gitkeep
+
+# Editor
+.vscode/
+.idea/

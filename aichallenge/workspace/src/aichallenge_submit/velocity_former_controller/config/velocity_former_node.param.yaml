@@ -1,0 +1,34 @@
+/**:
+  ros__parameters:
+    log_interval_sec: 5.0           # 推論統計ログを出す間隔（秒）
+
+    model:
+      # 速度推論用 ONNX のパス
+      velocity_onnx_path: "/path/to/velocity_former_velocity.onnx"
+      # ステアリング推論用 ONNX のパス（空文字列で無効化）
+      steering_onnx_path: ""
+      # 入力系列長（trajectoryのサンプリング点数。学習時のinput_sizeと一致させる）
+      input_size: 12
+
+    trajectory:
+      interval: 10                  # サンプリング間隔（点数）
+      minimum_num: 150              # 有効最低点数
+
+    control_mode:
+      # "velocity_only": 速度のみ推論し、ステアリングは0または下流ノードに任せる
+      # "steering_only": ステアリングのみ推論
+      # "both":          速度・ステアリング両方を推論
+      mode: "velocity_only"
+
+    output:
+      # ステアリング推論しない場合に固定で送るsteering値 [rad]
+      fallback_steering: 0.0
+      # 速度推論しない場合に固定で送るlongitudinal.speed値 [m/s]
+      fallback_velocity: 0.0
+      # 出力の物理的なクリップ
+      max_velocity: 30.0
+      min_velocity: 0.0
+      max_steering: 0.7
+      min_steering: -0.7
+
+    debug: false
