@@ -19,6 +19,7 @@ x-autoware-base: &autoware-base
     - ROS_LOG_DIR=${ROS_LOG_DIR:-}
     - HOST_UID=${HOST_UID:-}
     - HOST_GID=${HOST_GID:-}
+    - VEHICLE_MODEL=${VEHICLE_MODEL:-}
   volumes:
     - ./output:${OUTPUT_ROOT:-/output}
     - ./aichallenge:/aichallenge

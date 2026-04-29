@@ -23,6 +23,10 @@ case "${mode}" in
     ;;
 esac
 
+if [ -n "${VEHICLE_MODEL:-}" ]; then
+    opts+=("vehicle_model:=${VEHICLE_MODEL}")
+fi
+
 export ROS_DOMAIN_ID=$id
 
 mkdir -p "${out_dir}"
