@@ -1,0 +1,24 @@
+# TODO: 実機キャリブレーション値で置換すること。
+# 現状は racing_kart_sensor_kit の値を Lexus の wheel_base 比 (2.79/1.087) で線形スケールした初期値。
+base_link:
+  sensor_kit_base_link:
+    x: 1.395  # = wheel_base / 2.0 (Lexus 車両中央)
+    y: 0.0
+    z: 0.0
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+  camera_link:
+    x: 2.054  # kart 0.8 を wheel_base 比でスケール
+    y: 0.0
+    z: 0.7
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+  lidar_link:
+    x: 4.236  # kart 1.65 を wheel_base 比でスケール
+    y: 0.0
+    z: 0.0
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
