@@ -15,24 +15,40 @@ ml_workspace/
 │  └─ YYYYMMDD-HHMMSS/...
 ├─ val/                     # 検証用に分けたrosbag置き場（任意）
 │  └─ YYYYMMDD-HHMMSS/...
-└─ tiny_lidar_net/
+├─ tiny_lidar_net/
+│  ├─ README.md
+│  ├─ requirements.txt
+│  ├─ train.py
+│  ├─ config/
+│  │  └─ train.yaml
+│  ├─ datasets/             # extract_data_from_bag.py の出力先（例）
+│  │  ├─ train/...
+│  │  └─ val/...
+│  ├─ lib/
+│  │  ├─ __init__.py
+│  │  ├─ data.py
+│  │  ├─ loss.py
+│  │  └─ model.py
+│  ├─ outputs/              # 学習ログ出力先（Hydraの既定）
+│  ├─ extract_data_from_bag.py
+│  ├─ osm2csv.py
+│  └─ convert_weight.py
+└─ velocity_former/
    ├─ README.md
    ├─ requirements.txt
    ├─ train.py
+   ├─ export_onnx.py
+   ├─ extract_data_from_bag.py
    ├─ config/
    │  └─ train.yaml
-   ├─ datasets/             # extract_data_from_bag.py の出力先（例）
-   │  ├─ train/...
-   │  └─ val/...
    ├─ lib/
    │  ├─ __init__.py
    │  ├─ data.py
    │  ├─ loss.py
    │  └─ model.py
-   ├─ outputs/              # 学習ログ出力先（Hydraの既定）
-   ├─ extract_data_from_bag.py
-   ├─ osm2csv.py
-   └─ convert_weight.py
+   ├─ datasets/             # extract_data_from_bag.py の出力先
+   ├─ checkpoints/          # 学習チェックポイント
+   └─ logs/                 # TensorBoardログ
 ```
 
 ## 各項目の説明
@@ -42,3 +58,4 @@ ml_workspace/
 - `rawdata/`: 記録した rosbag（mcap）の保存先です（タイムスタンプ名のディレクトリが作られます）。
 - `train/`, `val/`: `rawdata/` から分けた rosbag（mcap）を置くためのディレクトリです（運用に応じて使います）。
 - `tiny_lidar_net/`: TinyLiDARNet 用のデータ変換・学習・重み変換コード一式です。使い方は `aichallenge/ml_workspace/tiny_lidar_net/README.md` を参照してください。
+- `velocity_former/`: VelocityFormer (BERT-tiny ベース、trajectory → 制御コマンド) の学習・ONNX変換コード一式です。使い方は `aichallenge/ml_workspace/velocity_former/README.md` を参照してください。

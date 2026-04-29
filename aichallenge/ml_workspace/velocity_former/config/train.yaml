@@ -1,0 +1,46 @@
+data:
+  # データセットのディレクトリパス（extract_data_from_bag.pyの出力先）
+  train_dir: "/aichallenge/ml_workspace/velocity_former/datasets/train"
+  val_dir: "/aichallenge/ml_workspace/velocity_former/datasets/val"
+
+model:
+  # HuggingFaceの事前学習モデル名
+  pretrained_model: "prajjwal1/bert-tiny"
+  # 1サンプルあたりの trajectory ポイント数（系列長）
+  input_size: 12
+  # 出力次元
+  num_labels: 1
+  # ラベル種別: "velocity" or "steering"
+  label_type: "velocity"
+
+trajectory:
+  minimum_num: 150   # 1データあたりの最低のポイント数
+  interval: 10       # ロードするpointの間隔
+  point_num: 12      # 1データあたりのポイント数（input_sizeと一致）
+  # ステアリング学習時の最大値クリップ (rad)
+  max_steering: 0.7
+  min_steering: -0.7
+
+train:
+  batch_size: 64
+  num_workers: 4
+  epochs: 200
+  lr: 1.0e-4
+  early_stop_patience: 20
+
+  # 事前学習済みckptパス（None で新規学習）
+  pretrained_path: null
+
+  # 保存先
+  save_dir: "/aichallenge/ml_workspace/velocity_former/checkpoints"
+  log_dir: "/aichallenge/ml_workspace/velocity_former/logs"
+
+  # 損失重み（label_type が出力に対する重み。tiny_lidar_net と同じ形式に揃えた）
+  loss:
+    huber_beta: 1.0
+
+augment:
+  # 回転・反転の augmentation を行うか
+  enable: true
+  # x軸/y軸鏡像反転を加える確率（0.0で無効）
+  flip_prob: 0.5
