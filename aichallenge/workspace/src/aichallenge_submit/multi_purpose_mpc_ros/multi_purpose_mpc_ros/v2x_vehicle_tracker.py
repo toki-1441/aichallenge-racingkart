@@ -6,6 +6,7 @@ operates on duck-typed messages whose attributes match
 and reusable from non-ROS contexts (e.g. offline replay of rosbag CSVs).
 """
 
+import math
 from collections import deque
 from typing import Deque, Dict, List, Tuple
 
@@ -33,19 +34,32 @@ class V2XVehicleTracker:
             x = float(v.position.x)
             y = float(v.position.y)
             buf = self._samples.setdefault(vid, deque(maxlen=2))
+
+            # Detect a position jump against the previous sample (if any).
+            jumped = False
+            if buf:
+                _t_prev, x_prev, y_prev = buf[-1]
+                if math.hypot(x - x_prev, y - y_prev) > self._jump_thresh:
+                    buf.clear()
+                    jumped = True
+
             buf.append((t, x, y))
-            if len(buf) == 2:
+
+            if jumped or len(buf) < 2:
+                self._velocities[vid] = (0.0, 0.0)
+            else:
                 t0, x0, y0 = buf[0]
                 t1, x1, y1 = buf[1]
                 dt = t1 - t0
                 if dt > 0.0:
                     vx = (x1 - x0) / dt
                     vy = (y1 - y0) / dt
-                    self._velocities[vid] = (vx, vy)
+                    if math.hypot(vx, vy) > self._v_max_safety:
+                        self._velocities[vid] = (0.0, 0.0)
+                    else:
+                        self._velocities[vid] = (vx, vy)
                 else:
                     self._velocities[vid] = (0.0, 0.0)
-            else:
-                self._velocities[vid] = (0.0, 0.0)
             active.append(vid)
         self._active = active
 

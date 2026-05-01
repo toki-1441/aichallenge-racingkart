@@ -57,7 +57,7 @@ def _msg(stamp_sec: float, vehicles):
 
 
 def test_two_samples_constant_velocity_yields_finite_difference():
-    tracker = V2XVehicleTracker(v_max_safety=30.0, position_jump_threshold=5.0)
+    tracker = V2XVehicleTracker(v_max_safety=30.0, position_jump_threshold=20.0)
 
     tracker.update(_msg(0.0, [("d2", 0.0, 0.0)]))
     tracker.update(_msg(0.5, [("d2", 5.0, 2.5)]))
@@ -81,7 +81,7 @@ def test_unknown_vehicle_velocity_is_zero():
 
 
 def test_predict_positions_constant_velocity():
-    tracker = V2XVehicleTracker(v_max_safety=30.0, position_jump_threshold=5.0)
+    tracker = V2XVehicleTracker(v_max_safety=30.0, position_jump_threshold=20.0)
     tracker.update(_msg(0.0, [("d2", 0.0, 0.0)]))
     tracker.update(_msg(0.5, [("d2", 5.0, 2.5)]))  # vx=10, vy=5, latest (5,2.5)
 
@@ -90,3 +90,24 @@ def test_predict_positions_constant_velocity():
     assert points[0] == pytest.approx((5.0, 2.5))
     assert points[1] == pytest.approx((10.0, 5.0))
     assert points[2] == pytest.approx((15.0, 7.5))
+
+
+def test_position_jump_resets_velocity_and_drops_old_sample():
+    tracker = V2XVehicleTracker(v_max_safety=30.0, position_jump_threshold=5.0)
+    tracker.update(_msg(0.0, [("d2", 0.0, 0.0)]))
+    tracker.update(_msg(0.1, [("d2", 100.0, 0.0)]))  # 100 m jump > 5 m
+
+    assert tracker.velocity("d2") == (0.0, 0.0)
+    # Predictions should anchor at the *new* position with zero velocity.
+    points = tracker.predict_positions("d2", [0.0, 0.5])
+    assert points[0] == pytest.approx((100.0, 0.0))
+    assert points[1] == pytest.approx((100.0, 0.0))
+
+
+def test_velocity_above_safety_cap_is_zeroed():
+    # 50 m / 0.05 s = 1000 m/s, well above v_max_safety=30
+    tracker = V2XVehicleTracker(v_max_safety=30.0, position_jump_threshold=200.0)
+    tracker.update(_msg(0.0, [("d2", 0.0, 0.0)]))
+    tracker.update(_msg(0.05, [("d2", 50.0, 0.0)]))
+
+    assert tracker.velocity("d2") == (0.0, 0.0)
