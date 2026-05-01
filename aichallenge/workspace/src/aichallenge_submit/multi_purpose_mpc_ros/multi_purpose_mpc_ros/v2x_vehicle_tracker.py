@@ -75,3 +75,9 @@ class V2XVehicleTracker:
         _t_last, x_last, y_last = buf[-1]
         vx, vy = self._velocities.get(vehicle_id, (0.0, 0.0))
         return [(x_last + vx * t, y_last + vy * t) for t in t_samples]
+
+    def active_vehicle_ids(self) -> List[str]:
+        return list(self._active)
+
+    def predict_all(self, t_samples) -> Dict[str, List[Tuple[float, float]]]:
+        return {vid: self.predict_positions(vid, t_samples) for vid in self._active}

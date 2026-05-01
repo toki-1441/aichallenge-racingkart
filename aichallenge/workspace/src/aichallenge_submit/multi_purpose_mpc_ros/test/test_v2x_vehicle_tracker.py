@@ -111,3 +111,33 @@ def test_velocity_above_safety_cap_is_zeroed():
     tracker.update(_msg(0.05, [("d2", 50.0, 0.0)]))
 
     assert tracker.velocity("d2") == (0.0, 0.0)
+
+
+def test_two_vehicles_tracked_independently():
+    tracker = V2XVehicleTracker(v_max_safety=30.0, position_jump_threshold=20.0)
+    tracker.update(_msg(0.0, [("d2", 0.0, 0.0), ("d3", 10.0, 10.0)]))
+    tracker.update(_msg(0.5, [("d2", 5.0, 0.0), ("d3", 10.0, 12.5)]))
+
+    assert tracker.velocity("d2") == pytest.approx((10.0, 0.0))
+    assert tracker.velocity("d3") == pytest.approx((0.0, 5.0))
+
+
+def test_active_ids_reflect_latest_message_only():
+    tracker = V2XVehicleTracker(v_max_safety=30.0, position_jump_threshold=20.0)
+    tracker.update(_msg(0.0, [("d2", 0.0, 0.0), ("d3", 10.0, 10.0)]))
+    tracker.update(_msg(0.5, [("d2", 5.0, 0.0)]))  # d3 dropped this tick
+
+    assert tracker.active_vehicle_ids() == ["d2"]
+    # d3 is still in the internal state but not reported as active.
+    assert tracker.velocity("d3") == pytest.approx((0.0, 0.0))
+
+
+def test_predict_all_returns_only_active_vehicles():
+    tracker = V2XVehicleTracker(v_max_safety=30.0, position_jump_threshold=20.0)
+    tracker.update(_msg(0.0, [("d2", 0.0, 0.0), ("d3", 10.0, 10.0)]))
+    tracker.update(_msg(0.5, [("d2", 5.0, 0.0)]))  # d3 dropped
+
+    out = tracker.predict_all([0.0, 1.0])
+    assert set(out.keys()) == {"d2"}
+    assert out["d2"][0] == pytest.approx((5.0, 0.0))
+    assert out["d2"][1] == pytest.approx((15.0, 0.0))
