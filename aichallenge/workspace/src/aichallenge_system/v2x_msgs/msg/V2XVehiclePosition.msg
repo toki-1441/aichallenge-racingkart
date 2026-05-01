@@ -1,0 +1,2 @@
+string vehicle_id
+geometry_msgs/PointStamped position
