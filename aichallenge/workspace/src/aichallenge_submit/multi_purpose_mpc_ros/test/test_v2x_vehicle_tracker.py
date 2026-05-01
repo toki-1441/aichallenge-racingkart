@@ -65,3 +65,16 @@ def test_two_samples_constant_velocity_yields_finite_difference():
     vx, vy = tracker.velocity("d2")
     assert vx == pytest.approx(10.0)
     assert vy == pytest.approx(5.0)
+
+
+def test_single_sample_yields_zero_velocity():
+    tracker = V2XVehicleTracker(v_max_safety=30.0, position_jump_threshold=5.0)
+
+    tracker.update(_msg(0.0, [("d2", 1.0, 2.0)]))
+
+    assert tracker.velocity("d2") == (0.0, 0.0)
+
+
+def test_unknown_vehicle_velocity_is_zero():
+    tracker = V2XVehicleTracker(v_max_safety=30.0, position_jump_threshold=5.0)
+    assert tracker.velocity("d9") == (0.0, 0.0)
