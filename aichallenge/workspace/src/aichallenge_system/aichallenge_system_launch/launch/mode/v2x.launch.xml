@@ -13,4 +13,7 @@
       </include>
     </group>
   </group>
+
+  <!-- V2XVehiclePositionArray -> MarkerArray for RViz -->
+  <node pkg="aichallenge_system_launch" exec="v2x_marker_publisher.py" name="v2x_marker_publisher" output="screen"/>
 </launch>

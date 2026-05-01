@@ -38,6 +38,7 @@ install(PROGRAMS
   script/control_mode_adapter.py
   script/object_marker.py
   script/motion_analytics.py
+  script/v2x_marker_publisher.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
