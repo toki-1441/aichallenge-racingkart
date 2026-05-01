@@ -1,0 +1,53 @@
+"""Per-vehicle finite-difference velocity tracker for V2X positions.
+
+This module is intentionally pure Python with no rclpy dependency: it
+operates on duck-typed messages whose attributes match
+``v2x_msgs/V2XVehiclePositionArray``. That keeps it cheap to unit-test
+and reusable from non-ROS contexts (e.g. offline replay of rosbag CSVs).
+"""
+
+from collections import deque
+from typing import Deque, Dict, List, Tuple
+
+
+def _stamp_to_seconds(stamp) -> float:
+    return float(stamp.sec) + float(stamp.nanosec) * 1e-9
+
+
+class V2XVehicleTracker:
+    """Tracks the latest two samples per ``vehicle_id`` and exposes
+    constant-velocity predictions over a caller-provided time grid."""
+
+    def __init__(self, v_max_safety: float, position_jump_threshold: float):
+        self._v_max_safety = float(v_max_safety)
+        self._jump_thresh = float(position_jump_threshold)
+        self._samples: Dict[str, Deque[Tuple[float, float, float]]] = {}
+        self._velocities: Dict[str, Tuple[float, float]] = {}
+        self._active: List[str] = []
+
+    def update(self, msg) -> None:
+        active: List[str] = []
+        for v in msg.vehicles:
+            vid = v.vehicle_id
+            t = _stamp_to_seconds(v.header.stamp)
+            x = float(v.position.x)
+            y = float(v.position.y)
+            buf = self._samples.setdefault(vid, deque(maxlen=2))
+            buf.append((t, x, y))
+            if len(buf) == 2:
+                t0, x0, y0 = buf[0]
+                t1, x1, y1 = buf[1]
+                dt = t1 - t0
+                if dt > 0.0:
+                    vx = (x1 - x0) / dt
+                    vy = (y1 - y0) / dt
+                    self._velocities[vid] = (vx, vy)
+                else:
+                    self._velocities[vid] = (0.0, 0.0)
+            else:
+                self._velocities[vid] = (0.0, 0.0)
+            active.append(vid)
+        self._active = active
+
+    def velocity(self, vehicle_id: str) -> Tuple[float, float]:
+        return self._velocities.get(vehicle_id, (0.0, 0.0))
