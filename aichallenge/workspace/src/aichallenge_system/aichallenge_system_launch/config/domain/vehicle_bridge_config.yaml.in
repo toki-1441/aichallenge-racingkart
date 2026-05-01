@@ -12,9 +12,9 @@ to_domain: @TO_DOMAIN@
 
 topics:
   # Control commands: Autoware -> AWSIM
-  awsim/control_cmd:
+  control/command/control_cmd:
     type: autoware_auto_control_msgs/msg/AckermannControlCommand
-    remap: /@VEHICLE_NS@/awsim/control_cmd
+    remap: /@VEHICLE_NS@/control/command/control_cmd
 
   awsim/control_mode_request_topic:
     type: std_msgs/msg/Bool
