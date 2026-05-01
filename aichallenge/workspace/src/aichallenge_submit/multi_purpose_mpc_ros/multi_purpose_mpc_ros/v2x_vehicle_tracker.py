@@ -19,9 +19,10 @@ class V2XVehicleTracker:
     """Tracks the latest two samples per ``vehicle_id`` and exposes
     constant-velocity predictions over a caller-provided time grid."""
 
-    def __init__(self, v_max_safety: float, position_jump_threshold: float):
+    def __init__(self, v_max_safety: float, position_jump_threshold: float, warn_callback=None):
         self._v_max_safety = float(v_max_safety)
         self._jump_thresh = float(position_jump_threshold)
+        self._warn = warn_callback if warn_callback is not None else (lambda _msg: None)
         self._samples: Dict[str, Deque[Tuple[float, float, float]]] = {}
         self._velocities: Dict[str, Tuple[float, float]] = {}
         self._active: List[str] = []
@@ -42,6 +43,9 @@ class V2XVehicleTracker:
                 if math.hypot(x - x_prev, y - y_prev) > self._jump_thresh:
                     buf.clear()
                     jumped = True
+                    self._warn(
+                        f"V2X: position jump for vehicle '{vid}' "
+                        f"(>{self._jump_thresh} m) — velocity reset")
 
             buf.append((t, x, y))
 
@@ -56,6 +60,9 @@ class V2XVehicleTracker:
                     vy = (y1 - y0) / dt
                     if math.hypot(vx, vy) > self._v_max_safety:
                         self._velocities[vid] = (0.0, 0.0)
+                        self._warn(
+                            f"V2X: velocity for vehicle '{vid}' exceeds "
+                            f"{self._v_max_safety} m/s — clamped to zero")
                     else:
                         self._velocities[vid] = (vx, vy)
                 else:

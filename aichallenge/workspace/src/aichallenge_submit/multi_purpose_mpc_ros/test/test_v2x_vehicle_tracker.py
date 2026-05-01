@@ -172,3 +172,40 @@ def test_predictions_to_obstacles_empty_input():
     from multi_purpose_mpc_ros.v2x_vehicle_tracker import predictions_to_obstacles
     assert predictions_to_obstacles(
         {}, vehicle_radius=0.5, obstacle_cls=_StubObstacle) == []
+
+
+def test_position_jump_invokes_warn_callback():
+    msgs = []
+    tracker = V2XVehicleTracker(
+        v_max_safety=30.0,
+        position_jump_threshold=5.0,
+        warn_callback=msgs.append,
+    )
+    tracker.update(_msg(0.0, [("d2", 0.0, 0.0)]))
+    tracker.update(_msg(0.1, [("d2", 100.0, 0.0)]))
+
+    assert any("position jump" in m for m in msgs)
+    assert any("d2" in m for m in msgs)
+
+
+def test_velocity_cap_invokes_warn_callback():
+    msgs = []
+    tracker = V2XVehicleTracker(
+        v_max_safety=30.0,
+        position_jump_threshold=200.0,
+        warn_callback=msgs.append,
+    )
+    tracker.update(_msg(0.0, [("d2", 0.0, 0.0)]))
+    tracker.update(_msg(0.05, [("d2", 50.0, 0.0)]))
+
+    assert any("velocity" in m for m in msgs)
+    assert any("d2" in m for m in msgs)
+
+
+def test_warn_callback_optional_default_is_silent():
+    # Construct without a callback; clamp fires must not raise.
+    tracker = V2XVehicleTracker(v_max_safety=30.0, position_jump_threshold=5.0)
+    tracker.update(_msg(0.0, [("d2", 0.0, 0.0)]))
+    tracker.update(_msg(0.1, [("d2", 100.0, 0.0)]))  # would warn if a callback existed
+
+    assert tracker.velocity("d2") == (0.0, 0.0)  # clamp still fires

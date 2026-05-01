@@ -462,13 +462,18 @@ class MPCController(Node):
         if self.USE_OBSTACLE_AVOIDANCE:
             self._static_obstacles: List[Obstacle] = create_obstacles()
             self._dynamic_obstacles: List[Obstacle] = []
-            self._obstacles_updated = False
+            # Trigger an initial rebuild so CSV-loaded static obstacles end
+            # up in the occupancy grid even when V2X is disabled. When V2X
+            # is enabled, the first _v2x_callback also raises this flag —
+            # the redundant rebuild is harmless.
+            self._obstacles_updated = bool(self._static_obstacles)
             v2x_cfg = self._cfg.v2x_obstacle_avoidance  # type: ignore
             self._v2x_enabled = bool(v2x_cfg.enabled)
             if self._v2x_enabled:
                 self._v2x_tracker = V2XVehicleTracker(
                     v_max_safety=float(v2x_cfg.v_max_safety),
                     position_jump_threshold=float(v2x_cfg.position_jump_threshold),
+                    warn_callback=self.get_logger().warn,
                 )
                 self._v2x_vehicle_radius = float(v2x_cfg.vehicle_radius)
                 n_pred = int(v2x_cfg.n_pred) if v2x_cfg.n_pred is not None else int(self._cfg.mpc.N)  # type: ignore
