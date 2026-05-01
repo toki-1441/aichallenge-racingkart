@@ -19,7 +19,7 @@ from rclpy.parameter import Parameter
 from visualization_msgs.msg import Marker, MarkerArray
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy
 
-from std_msgs.msg import Empty, Bool, Float32MultiArray, Float64MultiArray, Int32
+from std_msgs.msg import Empty, Bool, Float32MultiArray, Int32
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Quaternion, Pose2D, Point, Vector3
 from std_msgs.msg import ColorRGBA
@@ -166,8 +166,6 @@ class MPCController(Node):
         self._ref_path_pub.shutdown() # type: ignore
         self._ref_path_pub_dummy.shutdown() # type: ignore
         self._odom_sub.shutdown() # type: ignore
-        if self.USE_OBSTACLE_AVOIDANCE:
-            self._obstacles_sub.shutdown() # type: ignore
 
         self._group.destroy() # type: ignore
         super().destroy_node()
@@ -455,10 +453,9 @@ class MPCController(Node):
 
         # Obstacles
         if self.USE_OBSTACLE_AVOIDANCE:
-            self._obstacles = create_obstacles()
-            self._use_obstacles_topic = self._obstacles == []
+            self._static_obstacles: List[Obstacle] = create_obstacles()
+            self._dynamic_obstacles: List[Obstacle] = []
             self._obstacles_updated = False
-            self._last_obstacles_msgs_raw = None
 
         # Laps
         self._current_laps = 1
@@ -524,10 +521,6 @@ class MPCController(Node):
                 Int32, "/aichallenge/pitstop/condition", self._condition_callback, 1)
 
         if self.USE_OBSTACLE_AVOIDANCE:
-            self._obstacles_sub = self.create_subscription(
-                Float64MultiArray, "/aichallenge/objects", self._obstacles_callback, 1)
-                # Float64MultiArray, "/aichallenge/objects2", self._obstacles_callback, 1)
-
             if self._cfg.reference_path.use_path_constraints_topic: # type: ignore
                 self._path_constraints_sub = self.create_subscription(
                     PathConstraints, "/path_constraints_provider/path_constraints", self._path_constraints_callback, 1)
@@ -565,21 +558,6 @@ class MPCController(Node):
 
     def _odom_callback(self, msg: Odometry) -> None:
         self._odom = msg
-
-    def _obstacles_callback(self, msg: Float64MultiArray) -> None:
-        if not self._use_obstacles_topic:
-            return
-
-        obstacles_updated = (self._last_obstacles_msgs_raw != msg.data) and (len(msg.data) > 0)
-        if obstacles_updated:
-            self._last_obstacles_msgs_raw = msg.data
-            self._obstacles = []
-            for i in range(0, len(msg.data), 4):
-                x = msg.data[i]
-                y = msg.data[i + 1]
-                self._obstacles.append(Obstacle(cx=x, cy=y, radius=self._cfg.obstacles.radius)) # type: ignore
-            # NOTE: This flag should be set to True only after the obstacles are updated
-            self._obstacles_updated = True
 
     def _control_mode_request_callback(self, msg):
         if msg.data and not self._enable_control:
@@ -743,12 +721,6 @@ class MPCController(Node):
         self._control_rate.sleep()
 
         if self._loop % 100 == 0:
-            # update obstacles
-            if self.USE_OBSTACLE_AVOIDANCE and not self._use_obstacles_topic:
-                # self._obstacle_manager.push_next_obstacle()
-                self._obstacles = self._obstacle_manager.current_obstacles
-                self._obstacles_updated = True
-
             # update reference path
             if self._cfg.reference_path.update_by_topic: # type: ignore
                 new_referece_path = self._create_reference_path_from_autoware_trajectory(self._trajectory)
@@ -767,9 +739,8 @@ class MPCController(Node):
 
         if self.USE_OBSTACLE_AVOIDANCE and self._obstacles_updated:
             self._obstacles_updated = False
-            # self.get_logger().info("Obstacles updated")
             self._map.reset_map()
-            self._map.add_obstacles(self._obstacles)
+            self._map.add_obstacles(self._static_obstacles + self._dynamic_obstacles)
             self._reference_path.reset_dynamic_constraints()
 
         is_colliding = False
