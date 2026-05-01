@@ -30,6 +30,11 @@ from rclpy.parameter import Parameter
 # autoware
 from autoware_auto_control_msgs.msg import AckermannControlCommand
 from autoware_auto_planning_msgs.msg import Trajectory
+from v2x_msgs.msg import V2XVehiclePositionArray
+from multi_purpose_mpc_ros.v2x_vehicle_tracker import (
+    V2XVehicleTracker,
+    predictions_to_obstacles,
+)
 
 # Multi_Purpose_MPC
 from multi_purpose_mpc_ros.core.map import Map, Obstacle
@@ -167,6 +172,8 @@ class MPCController(Node):
         self._ref_path_pub_dummy.shutdown() # type: ignore
         self._odom_sub.shutdown() # type: ignore
 
+        if self.USE_OBSTACLE_AVOIDANCE and self._v2x_enabled:
+            self._v2x_sub.shutdown()  # type: ignore
         self._group.destroy() # type: ignore
         super().destroy_node()
 
@@ -456,6 +463,21 @@ class MPCController(Node):
             self._static_obstacles: List[Obstacle] = create_obstacles()
             self._dynamic_obstacles: List[Obstacle] = []
             self._obstacles_updated = False
+            v2x_cfg = self._cfg.v2x_obstacle_avoidance  # type: ignore
+            self._v2x_enabled = bool(v2x_cfg.enabled)
+            if self._v2x_enabled:
+                self._v2x_tracker = V2XVehicleTracker(
+                    v_max_safety=float(v2x_cfg.v_max_safety),
+                    position_jump_threshold=float(v2x_cfg.position_jump_threshold),
+                )
+                self._v2x_vehicle_radius = float(v2x_cfg.vehicle_radius)
+                n_pred = int(v2x_cfg.n_pred) if v2x_cfg.n_pred is not None else int(self._cfg.mpc.N)  # type: ignore
+                if v2x_cfg.t_horizon_override is not None:
+                    t_horizon = float(v2x_cfg.t_horizon_override)
+                else:
+                    t_horizon = float(self._cfg.mpc.N) / float(self._cfg.mpc.control_rate)  # type: ignore
+                denom = max(n_pred - 1, 1)
+                self._v2x_t_samples = [k * t_horizon / denom for k in range(n_pred)]
 
         # Laps
         self._current_laps = 1
@@ -529,6 +551,13 @@ class MPCController(Node):
                 self._border_cells_sub = self.create_subscription(
                     BorderCells, "/path_constraints_provider/border_cells", self._border_cells_callback, 1)
 
+            if self._v2x_enabled:
+                self._v2x_sub = self.create_subscription(
+                    V2XVehiclePositionArray,
+                    "/v2x/vehicle_positions",
+                    self._v2x_callback,
+                    1)
+
     def _create_ackerman_control_command(self, stamp, u, acc, bug_acc_enabled):
         v_cmd = u[0]
         steer_cmd = u[1]
@@ -567,6 +596,13 @@ class MPCController(Node):
     def _path_constraints_callback(self, msg: PathConstraints):
         self._reference_path.set_path_constraints(
             msg.upper_bounds, msg.lower_bounds, msg.rows, msg.cols)
+
+    def _v2x_callback(self, msg: V2XVehiclePositionArray) -> None:
+        self._v2x_tracker.update(msg)
+        predictions = self._v2x_tracker.predict_all(self._v2x_t_samples)
+        self._dynamic_obstacles = predictions_to_obstacles(
+            predictions, self._v2x_vehicle_radius)
+        self._obstacles_updated = True
 
     def _border_cells_callback(self, msg: BorderCells):
         self._reference_path.set_border_cells(
