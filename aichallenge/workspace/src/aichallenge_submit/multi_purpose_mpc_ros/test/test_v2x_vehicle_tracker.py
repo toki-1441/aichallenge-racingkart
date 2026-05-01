@@ -141,3 +141,34 @@ def test_predict_all_returns_only_active_vehicles():
     assert set(out.keys()) == {"d2"}
     assert out["d2"][0] == pytest.approx((5.0, 0.0))
     assert out["d2"][1] == pytest.approx((15.0, 0.0))
+
+
+@dataclass
+class _StubObstacle:
+    cx: float
+    cy: float
+    radius: float
+
+
+def test_predictions_to_obstacles_flattens_with_radius():
+    from multi_purpose_mpc_ros.v2x_vehicle_tracker import predictions_to_obstacles
+
+    predictions = {
+        "d2": [(1.0, 2.0), (3.0, 4.0)],
+        "d3": [(5.0, 6.0)],
+    }
+    obstacles = predictions_to_obstacles(
+        predictions, vehicle_radius=0.5, obstacle_cls=_StubObstacle)
+
+    centers = sorted((o.cx, o.cy, o.radius) for o in obstacles)
+    assert centers == sorted([
+        (1.0, 2.0, 0.5),
+        (3.0, 4.0, 0.5),
+        (5.0, 6.0, 0.5),
+    ])
+
+
+def test_predictions_to_obstacles_empty_input():
+    from multi_purpose_mpc_ros.v2x_vehicle_tracker import predictions_to_obstacles
+    assert predictions_to_obstacles(
+        {}, vehicle_radius=0.5, obstacle_cls=_StubObstacle) == []

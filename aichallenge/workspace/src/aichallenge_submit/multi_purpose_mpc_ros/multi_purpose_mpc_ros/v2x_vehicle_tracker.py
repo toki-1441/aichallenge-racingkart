@@ -81,3 +81,22 @@ class V2XVehicleTracker:
 
     def predict_all(self, t_samples) -> Dict[str, List[Tuple[float, float]]]:
         return {vid: self.predict_positions(vid, t_samples) for vid in self._active}
+
+
+def predictions_to_obstacles(predictions, vehicle_radius: float, obstacle_cls=None):
+    """Flatten a ``{vehicle_id: [(x, y), ...]}`` mapping into a list of
+    circular obstacles consumable by ``multi_purpose_mpc_ros.core.map``.
+
+    ``obstacle_cls`` is injectable for testability; production callers
+    leave it as ``None`` to use ``core.map.Obstacle``. The deferred
+    import keeps this module's load time fast and lets the unit tests
+    on hosts without ``scikit-image`` exercise the helper with a stub
+    dataclass.
+    """
+    if obstacle_cls is None:
+        from multi_purpose_mpc_ros.core.map import Obstacle as obstacle_cls
+    out = []
+    for _vid, points in predictions.items():
+        for x, y in points:
+            out.append(obstacle_cls(cx=x, cy=y, radius=vehicle_radius))
+    return out
