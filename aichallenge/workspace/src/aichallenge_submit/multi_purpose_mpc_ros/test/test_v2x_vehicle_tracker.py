@@ -78,3 +78,15 @@ def test_single_sample_yields_zero_velocity():
 def test_unknown_vehicle_velocity_is_zero():
     tracker = V2XVehicleTracker(v_max_safety=30.0, position_jump_threshold=5.0)
     assert tracker.velocity("d9") == (0.0, 0.0)
+
+
+def test_predict_positions_constant_velocity():
+    tracker = V2XVehicleTracker(v_max_safety=30.0, position_jump_threshold=5.0)
+    tracker.update(_msg(0.0, [("d2", 0.0, 0.0)]))
+    tracker.update(_msg(0.5, [("d2", 5.0, 2.5)]))  # vx=10, vy=5, latest (5,2.5)
+
+    points = tracker.predict_positions("d2", [0.0, 0.5, 1.0])
+
+    assert points[0] == pytest.approx((5.0, 2.5))
+    assert points[1] == pytest.approx((10.0, 5.0))
+    assert points[2] == pytest.approx((15.0, 7.5))

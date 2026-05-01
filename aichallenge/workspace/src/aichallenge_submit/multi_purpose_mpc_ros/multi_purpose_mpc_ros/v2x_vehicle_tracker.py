@@ -51,3 +51,13 @@ class V2XVehicleTracker:
 
     def velocity(self, vehicle_id: str) -> Tuple[float, float]:
         return self._velocities.get(vehicle_id, (0.0, 0.0))
+
+    def predict_positions(
+        self, vehicle_id: str, t_samples
+    ) -> List[Tuple[float, float]]:
+        buf = self._samples.get(vehicle_id)
+        if not buf:
+            return []
+        _t_last, x_last, y_last = buf[-1]
+        vx, vy = self._velocities.get(vehicle_id, (0.0, 0.0))
+        return [(x_last + vx * t, y_last + vy * t) for t in t_samples]
