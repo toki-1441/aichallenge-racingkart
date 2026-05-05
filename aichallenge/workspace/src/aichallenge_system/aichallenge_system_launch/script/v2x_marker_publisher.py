@@ -14,7 +14,7 @@ VEHICLE_COLORS = {
     "d4": (1.0, 0.9, 0.2),
 }
 DEFAULT_COLOR = (1.0, 1.0, 1.0)
-SPHERE_DIAMETER = 0.6
+SPHERE_DIAMETER = 1.5  # rviz scale = diameter; radius ~1.5 m
 ALPHA = 0.9
 LIFETIME_SEC = 1
 
