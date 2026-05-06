@@ -17,7 +17,7 @@ from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
 from rclpy.parameter import Parameter
 from visualization_msgs.msg import Marker, MarkerArray
-from rclpy.qos import QoSProfile, QoSDurabilityPolicy
+from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy, QoSHistoryPolicy
 
 from std_msgs.msg import Empty, Bool, Float32MultiArray, Int32
 from nav_msgs.msg import Odometry
@@ -536,8 +536,15 @@ class MPCController(Node):
             Odometry, "/localization/kinematic_state", self._odom_callback, 1)
         self._control_mode_request_sub = self.create_subscription(
             Bool, "control/control_mode_request_topic", self._control_mode_request_callback, 1)
+        # simple_trajectory_generator publishes with BEST_EFFORT/KEEP_LAST(1) — match it
+        # so the subscription is QoS-compatible (rclpy default is RELIABLE).
+        trajectory_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
         self._trajectory_sub = self.create_subscription(
-            Trajectory, "planning/scenario_planning/trajectory", self._trajectory_callback, 1)
+            Trajectory, "planning/scenario_planning/trajectory", self._trajectory_callback, trajectory_qos)
         self._stop_request_sub = self.create_subscription(
             Empty, "/control/mpc/stop_request", self._stop_request_callback, 1)
 
