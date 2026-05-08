@@ -163,20 +163,6 @@ class MPCController(Node):
             self.get_logger().warn("USE_OBSTACLE_AVOIDANCE is enabled!")
             self.get_logger().warn("------------------------------------")
 
-    def destroy(self) -> None:
-        self._timer.destroy() # type: ignore
-        self._command_pub.shutdown() # type: ignore
-        self._mpc_pred_pub.shutdown() # type: ignore
-        self._mpc_pred_pub_dummy.shutdown() # type: ignore
-        self._ref_path_pub.shutdown() # type: ignore
-        self._ref_path_pub_dummy.shutdown() # type: ignore
-        self._odom_sub.shutdown() # type: ignore
-
-        if self.USE_OBSTACLE_AVOIDANCE and self._v2x_enabled:
-            self._v2x_sub.shutdown()  # type: ignore
-        self._group.destroy() # type: ignore
-        super().destroy_node()
-
     def _load_config(self) -> NamedTuple:
 
         # logging content
