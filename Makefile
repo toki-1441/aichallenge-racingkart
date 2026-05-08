@@ -9,9 +9,9 @@ HOST_UID ?= $(shell id -u)
 HOST_GID ?= $(shell id -g)
 export HOST_UID HOST_GID
 
-DOMAIN_ID ?= 1
+ROS_DOMAIN_ID ?= 1
 TIMESTAMP := $(shell date +%Y%m%d-%H%M%S)
-LOG_DIR ?= /output/$(TIMESTAMP)/d$(DOMAIN_ID)
+LOG_DIR ?= /output/$(TIMESTAMP)/d$(ROS_DOMAIN_ID)
 
 # autowareのbuildのみ
 autoware-build:
@@ -25,16 +25,16 @@ autoware-vehicle:
 # run autoware for simulator
 autoware-simulator:
 	@echo "Start Autoware for AWSIM"
-	LOG_DIR=$(LOG_DIR) RUN_MODE=awsim DOMAIN_ID=$(DOMAIN_ID) docker compose up -d autoware
+	LOG_DIR=$(LOG_DIR) RUN_MODE=awsim ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) docker compose up -d autoware
 
 # autoware command service
 autoware-request-initialpose:
-	CMD="env ROS_DOMAIN_ID=$(DOMAIN_ID) ros2 service call /set_initial_pose std_srvs/srv/Trigger '{}'" \
+	CMD="env ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) ros2 service call /set_initial_pose std_srvs/srv/Trigger '{}'" \
 	docker compose run --rm --no-deps autoware-command
 
 autoware-request-control:
 	@echo "Start control"
-	CMD="env ROS_DOMAIN_ID=$(DOMAIN_ID) ros2 topic pub -1 /awsim/control_mode_request_topic std_msgs/msg/Bool '{data: true}'" \
+	CMD="env ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) ros2 topic pub -1 /awsim/control_mode_request_topic std_msgs/msg/Bool '{data: true}'" \
 	docker compose run --rm --no-deps autoware-command
 
 # run simulator (docker compose up -d simulator)
@@ -56,11 +56,11 @@ zenoh:
 	docker compose up -d zenoh
 
 dev: simulator autoware-simulator
-	@echo "Start dev simulation (AWSIM + Autoware, DOMAIN_ID=$(DOMAIN_ID))"
+	@echo "Start dev simulation (AWSIM + Autoware, ROS_DOMAIN_ID=$(ROS_DOMAIN_ID))"
 	@echo "To stop: make down  (docker compose down --remove-orphans)"
 
 eval:
-	@echo "Start evaluation simulation (AWSIM + Autoware, DOMAIN_ID=$(DOMAIN_ID))"
+	@echo "Start evaluation simulation (AWSIM + Autoware, ROS_DOMAIN_ID=$(ROS_DOMAIN_ID))"
 	docker compose up -d autoware-simulator-evaluation
 	@echo "To stop: make down  (docker compose down --remove-orphans)"
 
