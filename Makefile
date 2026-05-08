@@ -1,8 +1,8 @@
 # make file inspired by https://roborovsky-racers.github.io/RoborovskyNote/
 SHELL := /bin/bash
 
-.PHONY: autoware-build autoware-vehicle autoware-simulator autoware-request-initialpose autoware-request-control autoware-driver-zenoh \
-	simulator simulator-reset dev driver zenoh download rviz2 down ps
+.PHONY: autoware-build autoware-vehicle autoware-simulator autoware-request-initialpose autoware-request-control  autoware-request-start autoware-driver-zenoh \
+	simulator simulator-reset dev dev2 dev3 dev4 driver zenoh download rviz2 down down2 down3 down4 ps
 
 # Used by docker-compose.yml for build/eval artifact ownership.
 HOST_UID ?= $(shell id -u)
@@ -29,18 +29,18 @@ autoware-simulator:
 
 # autoware command service
 autoware-request-initialpose:
-	CMD="env ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) ros2 service call /set_initial_pose std_srvs/srv/Trigger '{}'" \
-	docker compose run --rm --no-deps autoware-command
+	CMD="env ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) ros2 service call /set_initial_pose std_srvs/srv/Trigger '{}'" docker compose run --rm --no-deps autoware-command
 
 autoware-request-control:
-	@echo "Start control"
-	CMD="env ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) ros2 topic pub -1 /awsim/control_mode_request_topic std_msgs/msg/Bool '{data: true}'" \
-	docker compose run --rm --no-deps autoware-command
+	CMD="env ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) ros2 topic pub -1 /awsim/control_mode_request_topic std_msgs/msg/Bool '{data: true}'" docker compose run --rm --no-deps autoware-command
+
+autoware-request-start:
+	CMD="env ROS_DOMAIN_ID=0 ros2 topic pub -1 /admin/awsim/start std_msgs/msg/Bool '{data: true}'" docker compose run --rm --no-deps autoware-command
 
 # run simulator (docker compose up -d simulator)
 simulator:
-	@echo "Start AWSIM"
-	LOG_DIR=$(LOG_DIR) SIM_MODE=dev docker compose up -d simulator
+	@echo "Start AWSIM (SIM_MODE=$(SIM_MODE))"
+	LOG_DIR=$(LOG_DIR) SIM_MODE=$(SIM_MODE) docker compose up -d simulator
 
 simulator-reset:
 	@echo "Reset simulation"
@@ -58,6 +58,21 @@ zenoh:
 dev: simulator autoware-simulator
 	@echo "Start dev simulation (AWSIM + Autoware, ROS_DOMAIN_ID=$(ROS_DOMAIN_ID))"
 	@echo "To stop: make down  (docker compose down --remove-orphans)"
+
+dev2: SIM_MODE := 2p
+dev3: SIM_MODE := 3p
+dev4: SIM_MODE := 4p
+dev2 dev3 dev4: simulator
+	@N=$(@:dev%=%); \
+	echo "Start $$N-vehicle dev (autoware on ROS_DOMAIN_ID 1..$$N via docker compose -p)"; \
+	for p in $$(seq 1 $$N); do ROS_DOMAIN_ID=$$p docker compose -p $$p up -d autoware; done; \
+	$(MAKE) autoware-request-start
+	echo "To stop: make down$$N"
+
+down2 down3 down4:
+	@N=$(@:down%=%); \
+	for p in $$(seq 1 $$N); do docker compose -p $$p down --remove-orphans; done; \
+	docker compose down --remove-orphans
 
 eval:
 	@echo "Start evaluation simulation (AWSIM + Autoware, ROS_DOMAIN_ID=$(ROS_DOMAIN_ID))"
