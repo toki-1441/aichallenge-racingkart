@@ -461,6 +461,15 @@ class MPCController(Node):
             self._v2x_t_samples = [
                 k * t_horizon / max(mpc_N - 1, 1) for k in range(mpc_N)
             ]
+            # コリドー外の V2X 障害物で MPC のコリドー狭窄/反転が起きないよう、
+            # ref-path 近傍のみに絞り込む。閾値 = max_width/2 + vehicle_radius + 余白。
+            ref_max_width = float(self._cfg.reference_path.max_width)  # type: ignore
+            self._v2x_corridor_threshold_sq = (
+                ref_max_width / 2.0 + self._v2x_vehicle_radius + 0.5
+            ) ** 2
+            wps = self._reference_path.waypoints
+            self._waypoint_xy = np.asarray(
+                [(wp.x, wp.y) for wp in wps], dtype=np.float64)
 
         # Laps
         self._current_laps = 1
@@ -592,6 +601,18 @@ class MPCController(Node):
         self._dynamic_obstacles = predictions_to_obstacles(
             predictions, self._v2x_vehicle_radius)
         self._obstacles_updated = True
+
+    def _filter_obstacles_to_corridor(self, obstacles: List[Obstacle]) -> List[Obstacle]:
+        if not obstacles or self._waypoint_xy.size == 0:
+            return obstacles
+        thr_sq = self._v2x_corridor_threshold_sq
+        wps = self._waypoint_xy
+        kept: List[Obstacle] = []
+        for ob in obstacles:
+            dxy = wps - np.array([ob.cx, ob.cy], dtype=np.float64)
+            if np.min(np.einsum('ij,ij->i', dxy, dxy)) <= thr_sq:
+                kept.append(ob)
+        return kept
 
     def _border_cells_callback(self, msg: BorderCells):
         self._reference_path.set_border_cells(
@@ -765,7 +786,8 @@ class MPCController(Node):
         if self.USE_OBSTACLE_AVOIDANCE and self._obstacles_updated:
             self._obstacles_updated = False
             self._map.reset_map()
-            self._map.add_obstacles(self._static_obstacles + self._dynamic_obstacles)
+            filtered_dynamic = self._filter_obstacles_to_corridor(self._dynamic_obstacles)
+            self._map.add_obstacles(self._static_obstacles + filtered_dynamic)
             self._reference_path.reset_dynamic_constraints()
 
         is_colliding = False
