@@ -66,8 +66,8 @@ dev2 dev3 dev4: simulator
 	@N=$(@:dev%=%); \
 	echo "Start $$N-vehicle dev (autoware on ROS_DOMAIN_ID 1..$$N via docker compose -p)"; \
 	for p in $$(seq 1 $$N); do ROS_DOMAIN_ID=$$p docker compose -p $$p up -d autoware; done; \
-	$(MAKE) autoware-request-start
-	echo "To stop: make down$$N"
+	$(MAKE) autoware-request-start; \
+	echo "To Stop make down$$N"
 
 down2 down3 down4:
 	@N=$(@:down%=%); \
