@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+  <arg name="use_sim_time" default="true"/>
+  <arg name="debug_image" default="true" description="Publish BEV tensor as rgb8 Image when true"/>
+
+  <node pkg="bev_scene_stack" exec="bev_scene_stack_node.py" name="bev_scene_stack" output="screen">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <param from="$(find-pkg-share bev_scene_stack)/config/bev_scene_stack.param.yaml"/>
+    <param name="debug_image" value="$(var debug_image)"/>
+  </node>
+</launch>

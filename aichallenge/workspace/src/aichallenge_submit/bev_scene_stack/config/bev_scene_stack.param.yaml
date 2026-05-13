@@ -1,0 +1,33 @@
+/**:
+  ros__parameters:
+    # Tensor channels (C=4): 0=lane (Lanelet OSM polylines), 1=trajectory, 2=obstacles, 3=ego
+    odom_topic: "/localization/kinematic_state"
+    trajectory_topic: "/planning/scenario_planning/trajectory"
+    objects_topic: "/aichallenge/objects"
+    use_lanelet_osm_lane_lines: true
+    lanelet_osm_path: ""
+    vector_map_marker_topic: "/map/vector_map_marker"
+    use_vector_map_markers: false
+    # Marker fallback: LINE_STRIP/LINE_LIST only (no mesh). Substrings when use_vector_map_markers true.
+    vector_map_marker_namespace_substrings:
+      - "*"
+    vector_map_marker_namespace_exclude_substrings:
+      - parking
+      - lanelet_id
+      - arrow
+    lane_raster_half_width: 0.12
+    tensor_topic: "bev_scene_stack/tensor"
+    debug_image: true
+    debug_image_topic: "bev_scene_stack/debug_image"
+    grid_x_min: -12.0
+    grid_x_max: 52.0
+    grid_y_min: -18.0
+    grid_y_max: 18.0
+    resolution: 0.25
+    path_half_width: 0.45
+    publish_rate_hz: 15.0
+    # Ego channel: axis-aligned bbox in base_link (m). Defaults = racing_kart vehicle_info (rear axle at base_link).
+    ego_bbox_rear_x_m: -0.51
+    ego_bbox_front_x_m: 1.554
+    ego_bbox_right_y_m: -0.65
+    ego_bbox_left_y_m: 0.65
