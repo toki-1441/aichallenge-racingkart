@@ -8,6 +8,9 @@
   <arg name="vehicle_model" default="racing_kart"  description="vehicle model name"/>
   <arg name="sensor_model" default="racing_kart_sensor_kit" description="sensor model name"/>
   <!-- Optional parameters -->
+  <!-- Submit-side defaults: run_autoware.bash 等から引数を付けなくても有効。無効化は launch 引数で false を渡す。 -->
+  <arg name="launch_bev_scene_stack" default="true" description="Ego BEV tensor from trajectory + /aichallenge/objects"/>
+  <arg name="bev_scene_stack_debug_image" default="true" description="When launch_bev_scene_stack, publish rgb8 debug Image if true"/>
   <!-- Map -->
   <arg name="lanelet2_map_file" default="lanelet2_map.osm" description="lanelet2 map file name"/>
   <arg name="pointcloud_map_file" default="pointcloud_map.pcd" description="pointcloud map file name"/>
@@ -196,6 +199,13 @@
     </node_container>
 
   </group> <!-- map -->
+
+  <group if="$(var launch_bev_scene_stack)">
+    <include file="$(find-pkg-share bev_scene_stack)/launch/bev_scene_stack.launch.xml">
+      <arg name="use_sim_time" value="$(var use_sim_time)"/>
+      <arg name="debug_image" value="$(var bev_scene_stack_debug_image)"/>
+    </include>
+  </group>
 
   <!-- vehicle -->
   <group if="$(var launch_vehicle_interface)">
