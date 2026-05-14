@@ -15,24 +15,15 @@ ml_workspace/
 │  └─ YYYYMMDD-HHMMSS/...
 ├─ val/                     # 検証用に分けたrosbag置き場（任意）
 │  └─ YYYYMMDD-HHMMSS/...
-└─ tiny_lidar_net/
+├─ tiny_lidar_net/
+│  └─ ...
+└─ planner_bev/
    ├─ README.md
    ├─ requirements.txt
    ├─ train.py
-   ├─ config/
-   │  └─ train.yaml
-   ├─ datasets/             # extract_data_from_bag.py の出力先（例）
-   │  ├─ train/...
-   │  └─ val/...
-   ├─ lib/
-   │  ├─ __init__.py
-   │  ├─ data.py
-   │  ├─ loss.py
-   │  └─ model.py
-   ├─ outputs/              # 学習ログ出力先（Hydraの既定）
-   ├─ extract_data_from_bag.py
-   ├─ osm2csv.py
-   └─ convert_weight.py
+   ├─ prepare_data.py
+   ├─ config/train.yaml
+   └─ lib/...
 ```
 
 ## 各項目の説明
@@ -42,3 +33,4 @@ ml_workspace/
 - `rawdata/`: 記録した rosbag（mcap）の保存先です（タイムスタンプ名のディレクトリが作られます）。
 - `train/`, `val/`: `rawdata/` から分けた rosbag（mcap）を置くためのディレクトリです（運用に応じて使います）。
 - `tiny_lidar_net/`: TinyLiDARNet 用のデータ変換・学習・重み変換コード一式です。使い方は `aichallenge/ml_workspace/tiny_lidar_net/README.md` を参照してください。
+- `planner_bev/`: **BEV 条件付き K 本軌道 planner（P1）** の学習・合成データ・ルールスコアです。`aichallenge/ml_workspace/planner_bev/README.md` を参照してください。

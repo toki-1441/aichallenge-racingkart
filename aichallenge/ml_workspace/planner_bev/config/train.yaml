@@ -1,0 +1,50 @@
+defaults:
+  - _self_
+
+# Keep process cwd at launch dir so relative train_dir/val_dir resolve to planner_bev/
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: outputs/${now:%Y%m%d_%H%M%S}
+
+model:
+  h_bev: 256
+  w_bev: 144
+  c_in: 4
+  aux_dim: 0
+  num_heads: 4
+  horizon: 40
+  stem_channels: [32, 64, 128, 256]
+  embed_dim: 256
+  dropout: 0.1
+
+data:
+  train_dir: datasets/synthetic/train
+  val_dir: datasets/synthetic/val
+
+train:
+  batch_size: 8
+  epochs: 30
+  lr: 0.001
+  weight_decay: 0.0001
+  num_workers: 2
+  save_dir: checkpoints
+  log_dir: logs
+  pretrained_path: null
+  early_stop_patience: 8
+  loss:
+    huber_beta: 0.1
+    div_lambda: 0.01
+    div_d_min: 0.5
+    curv_lambda: 0.0
+  tensorboard:
+    batch_scalars_interval: 1
+    log_grad_norm_every_batches: 1
+    log_grad_hist_every_epochs: 1
+    log_weight_hist_every_epochs: 1
+    log_bev_every_epochs: 1
+    log_traj_figure_every_epochs: 1
+    weight_histogram_substrings: [conv, fuse, heads]
+    bev_preview_max_side: 400
+    log_graph: false
