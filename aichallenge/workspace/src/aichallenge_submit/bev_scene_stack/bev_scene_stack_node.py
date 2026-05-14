@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ego-centric BEV tensor: lane boundaries from Lanelet OSM, trajectory, obstacles, ego."""
+"""Ego-centric BEV tensor: lane OSM, trajectory, obstacles (+ V2X opponent GNSS), ego."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from autoware_auto_planning_msgs.msg import Trajectory
-from geometry_msgs.msg import PointStamped, Pose
+from geometry_msgs.msg import PointStamped, Pose, PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rclpy.duration import Duration
 from rclpy.node import Node
@@ -169,6 +169,14 @@ class BevSceneStackNode(Node):
         self.declare_parameter("odom_topic", "/localization/kinematic_state")
         self.declare_parameter("trajectory_topic", "/planning/scenario_planning/trajectory")
         self.declare_parameter("objects_topic", "/aichallenge/objects")
+        self.declare_parameter("use_v2x_opponent_poses", True)
+        self.declare_parameter(
+            "v2x_opponent_pose_topics",
+            ["/v2x/gnss/pose_with_covariance"],
+        )
+        self.declare_parameter("v2x_pose_map_frame", "map")
+        # If > 0, skip V2X poses whose map position is within this distance of ego (own echo).
+        self.declare_parameter("v2x_skip_if_near_ego_m", 0.0)
         self.declare_parameter("use_lanelet_osm_lane_lines", True)
         self.declare_parameter("lanelet_osm_path", "")
         self.declare_parameter("vector_map_marker_topic", "/map/vector_map_marker")
@@ -205,6 +213,12 @@ class BevSceneStackNode(Node):
         odom_topic = str(self.get_parameter("odom_topic").value)
         traj_topic = str(self.get_parameter("trajectory_topic").value)
         objects_topic = str(self.get_parameter("objects_topic").value)
+        self._use_v2x = bool(self.get_parameter("use_v2x_opponent_poses").value)
+        self._v2x_topics = _as_str_list(self.get_parameter("v2x_opponent_pose_topics").value)
+        if self._use_v2x and not self._v2x_topics:
+            self._v2x_topics = ["/v2x/gnss/pose_with_covariance"]
+        self._v2x_map_frame = str(self.get_parameter("v2x_pose_map_frame").value).strip() or "map"
+        self._v2x_skip_near = float(self.get_parameter("v2x_skip_if_near_ego_m").value)
         vm_topic = str(self.get_parameter("vector_map_marker_topic").value)
         self._use_osm = bool(self.get_parameter("use_lanelet_osm_lane_lines").value)
         self._lane_osm_path_param = str(self.get_parameter("lanelet_osm_path").value).strip()
@@ -238,6 +252,8 @@ class BevSceneStackNode(Node):
         self._odom: Optional[Odometry] = None
         self._traj: Optional[Trajectory] = None
         self._objects: List[float] = []
+        self._v2x_poses: Dict[str, PoseWithCovarianceStamped] = {}
+        self._v2x_frame_warn_last_ns: int = 0
         self._marker_store: Dict[Tuple[str, int], Marker] = {}
         self._markers: List[Marker] = []
         self._marker_count_logged = False
@@ -268,12 +284,28 @@ class BevSceneStackNode(Node):
             reliability=rclpy.qos.ReliabilityPolicy.RELIABLE,
             durability=rclpy.qos.DurabilityPolicy.TRANSIENT_LOCAL,
         )
+        qos_v2x = rclpy.qos.QoSProfile(
+            depth=10,
+            reliability=rclpy.qos.ReliabilityPolicy.RELIABLE,
+            durability=rclpy.qos.DurabilityPolicy.VOLATILE,
+        )
 
         self.create_subscription(Odometry, odom_topic, self._on_odom, qos_odom)
         self.create_subscription(Trajectory, traj_topic, self._on_traj, qos_traj)
         self.create_subscription(Float64MultiArray, objects_topic, self._on_objects, qos_objects)
         if self._use_vm:
             self.create_subscription(MarkerArray, vm_topic, self._on_markers, qos_vm)
+        seen_v2x: set[str] = set()
+        for tp in self._v2x_topics:
+            if tp in seen_v2x:
+                continue
+            seen_v2x.add(tp)
+            self.create_subscription(
+                PoseWithCovarianceStamped,
+                tp,
+                lambda m, topic=tp: self._on_v2x_pose(topic, m),
+                qos_v2x,
+            )
 
         self._pub_tensor = self.create_publisher(Float32MultiArray, tensor_topic, qos_odom)
         self._pub_image: Optional[object] = None
@@ -290,7 +322,8 @@ class BevSceneStackNode(Node):
             f"tensor topic '{tensor_topic}', "
             f"osm_lane_lines={len(self._lane_polylines_map)} polylines, "
             f"vector_map_markers={'on' if self._use_vm else 'off'}, "
-            f"ego_bbox x[{self._ego_x_min:.3f},{self._ego_x_max:.3f}] y[{self._ego_y_min:.3f},{self._ego_y_max:.3f}]"
+            f"ego_bbox x[{self._ego_x_min:.3f},{self._ego_x_max:.3f}] y[{self._ego_y_min:.3f},{self._ego_y_max:.3f}], "
+            f"v2x_opponents={'on [' + ','.join(self._v2x_topics) + ']' if self._use_v2x and self._v2x_topics else 'off'}"
         )
 
     def _load_lane_polylines(self) -> None:
@@ -330,6 +363,9 @@ class BevSceneStackNode(Node):
 
     def _on_objects(self, msg: Float64MultiArray) -> None:
         self._objects = list(msg.data)
+
+    def _on_v2x_pose(self, topic: str, msg: PoseWithCovarianceStamped) -> None:
+        self._v2x_poses[topic] = msg
 
     def _on_markers(self, msg: MarkerArray) -> None:
         # Lanelet2MapVisualization publishes incremental updates; merge like RViz.
@@ -406,6 +442,89 @@ class BevSceneStackNode(Node):
                         x_cell = self._x_max - (rr + 0.5) * self._res
                         if math.hypot(x_cell - x_b, y_cell - y_b) <= max(rad, self._res * 0.5):
                             grid[ch, rr, ccl] = 1.0
+
+    @staticmethod
+    def _point_in_polygon(px: float, py: float, poly: Sequence[Tuple[float, float]]) -> bool:
+        """Ray casting; poly closed implicitly (last -> first)."""
+        n = len(poly)
+        if n < 3:
+            return False
+        inside = False
+        j = n - 1
+        for i in range(n):
+            xi, yi = poly[i]
+            xj, yj = poly[j]
+            intersects = (yi > py) != (yj > py) and (
+                px < (xj - xi) * (py - yi) / (yj - yi + 1e-30) + xi
+            )
+            if intersects:
+                inside = not inside
+            j = i
+        return inside
+
+    def _opponent_footprint_corners_base(
+        self, odom: Odometry, msg: PoseWithCovarianceStamped
+    ) -> Optional[List[Tuple[float, float]]]:
+        """Opponent vehicle bbox in ego base_link: same half-extents as ego, oriented with V2X pose (map)."""
+        fid = (msg.header.frame_id or "").strip()
+        if fid and fid != self._v2x_map_frame:
+            now_ns = self.get_clock().now().nanoseconds
+            if now_ns - self._v2x_frame_warn_last_ns > 5_000_000_000:
+                self.get_logger().warning(
+                    f"V2X pose frame_id '{fid}' != '{self._v2x_map_frame}'; "
+                    "skipping until frame matches (transform not implemented)."
+                )
+                self._v2x_frame_warn_last_ns = now_ns
+            return None
+        pose = msg.pose.pose
+        qw = pose.orientation.w
+        qx = pose.orientation.x
+        qy = pose.orientation.y
+        qz = pose.orientation.z
+        if abs(qw) + abs(qx) + abs(qy) + abs(qz) < 1e-9:
+            return None
+        corners_body = (
+            (self._ego_x_min, self._ego_y_min, 0.0),
+            (self._ego_x_min, self._ego_y_max, 0.0),
+            (self._ego_x_max, self._ego_y_max, 0.0),
+            (self._ego_x_max, self._ego_y_min, 0.0),
+        )
+        base_xy: List[Tuple[float, float]] = []
+        for bx, by, bz in corners_body:
+            xm, ym, zm = apply_pose_to_map_point(pose, bx, by, bz)
+            xbb, ybb, _ = map_point_to_base(odom, xm, ym, zm)
+            base_xy.append((xbb, ybb))
+        return base_xy
+
+    def _raster_v2x_opponents(self, grid: np.ndarray, ch: int, odom: Odometry) -> None:
+        if not self._use_v2x or not self._v2x_topics:
+            return
+        ex = odom.pose.pose.position.x
+        ey = odom.pose.pose.position.y
+        poses = list(self._v2x_poses.items())
+        for _topic, msg in poses:
+            ox = msg.pose.pose.position.x
+            oy = msg.pose.pose.position.y
+            if self._v2x_skip_near > 0.0 and math.hypot(ox - ex, oy - ey) < self._v2x_skip_near:
+                continue
+            quad = self._opponent_footprint_corners_base(odom, msg)
+            if quad is None:
+                continue
+            xs = [p[0] for p in quad]
+            ys = [p[1] for p in quad]
+            pad = self._res
+            minx, maxx = min(xs) - pad, max(xs) + pad
+            miny, maxy = min(ys) - pad, max(ys) + pad
+            for r in range(self._h):
+                x_cell = self._x_max - (r + 0.5) * self._res
+                if x_cell < minx or x_cell > maxx:
+                    continue
+                for c in range(self._w):
+                    y_cell = self._y_max - (c + 0.5) * self._res
+                    if y_cell < miny or y_cell > maxy:
+                        continue
+                    if self._point_in_polygon(x_cell, y_cell, quad):
+                        grid[ch, r, c] = 1.0
 
     def _raster_ego_bbox(self, grid: np.ndarray, ch: int) -> None:
         """Fill channel cells whose centers lie inside ego axis-aligned bbox in base_link."""
@@ -484,8 +603,9 @@ class BevSceneStackNode(Node):
                 xb, yb, _ = map_point_to_base(odom, xm, ym, 0.0)
                 pts_b.append((xb, yb))
             self._raster_path_tube(grid, ch, pts_b, self._lane_hw)
+
     def _build_tensor(self, odom: Odometry) -> np.ndarray:
-        """Shape (4,H,W): lane (OSM or markers), trajectory tube, obstacles, ego vehicle bbox."""
+        """Shape (4,H,W): lane (OSM or markers), trajectory tube, obstacles (+V2X), ego bbox."""
         grid = np.zeros((self._c, self._h, self._w), dtype=np.float32)
 
         if self._lane_polylines_map:
@@ -507,6 +627,7 @@ class BevSceneStackNode(Node):
             self._raster_path_tube(grid, self.CH_TRAJ, pts_b, self._path_hw)
 
         self._raster_obstacles(grid, self.CH_OBS, odom)
+        self._raster_v2x_opponents(grid, self.CH_OBS, odom)
 
         self._raster_ego_bbox(grid, self.CH_EGO)
         return grid
