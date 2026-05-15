@@ -15,6 +15,16 @@ output/
 outputs/
 aichallenge/capture/
 
+# planner_bev: weights, TensorBoard runs, Hydra outputs, extracted datasets, viz PNGs
+aichallenge/ml_workspace/planner_bev/checkpoints/
+aichallenge/ml_workspace/planner_bev/checkpoint_*/
+aichallenge/ml_workspace/planner_bev/logs/
+aichallenge/ml_workspace/planner_bev/outputs/
+aichallenge/ml_workspace/planner_bev/datasets/
+aichallenge/ml_workspace/planner_bev/viz_val_infer/
+aichallenge/ml_workspace/planner_bev/viz_val_teacher/
+aichallenge/ml_workspace/planner_bev/viz_val_rule/
+
 # AI related local notes (do not commit)
 .claude
 doc/tmp/*
