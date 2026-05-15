@@ -1,0 +1,5 @@
+# PyTorch with CUDA 12.8 runtime (bundled). Install before requirements.txt:
+#   pip install -r requirements-torch-cu128.txt
+# See https://pytorch.org/get-started/locally/
+--index-url https://download.pytorch.org/whl/cu128
+torch>=2.7.0

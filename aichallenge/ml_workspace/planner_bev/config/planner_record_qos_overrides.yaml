@@ -1,0 +1,26 @@
+# QoS overrides for ros2 bag record (Humble: Overriding QoS Policies).
+# Without these, BEST_EFFORT / TRANSIENT_LOCAL publishers may not match the
+# recorder subscription and the bag may contain only /clock.
+
+/mpc/prediction:
+  reliability: reliable
+  durability: volatile
+  history: keep_last
+  depth: 50
+
+/planning/scenario_planning/trajectory:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 50
+
+/aichallenge/objects:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 20
+
+/tf_static:
+  durability: transient_local
+  reliability: reliable
+  history: keep_all

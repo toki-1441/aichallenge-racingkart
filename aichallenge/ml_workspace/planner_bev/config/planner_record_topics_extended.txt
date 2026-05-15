@@ -1,0 +1,14 @@
+# Extended list: larger bags — uncomment or merge lines as needed.
+
+/clock
+/tf
+/tf_static
+/bev_scene_stack/tensor
+/bev_scene_stack/debug_image
+/mpc/prediction
+/planning/scenario_planning/trajectory
+/localization/kinematic_state
+/aichallenge/objects
+/parameter_events
+/v2x/gnss/pose_with_covariance
+/map/vector_map_marker

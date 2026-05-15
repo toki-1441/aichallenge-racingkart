@@ -20,7 +20,8 @@
 
 ### 2.1 ソースとメッセージ
 
-- **トピック（既定）**: `bev_scene_stack/tensor`（`std_msgs/Float32MultiArray`）
+- **トピック（既定）**: `/bev_scene_stack/tensor`（`std_msgs/Float32MultiArray`）
+- **データ取得（rosbag2）**: 録画すべきトピック一覧・理由は `design_docs/planner_rosbag_recording.md`。実行用は `planner_bev/scripts/record_planner_training_bag.bash` と `config/planner_record_topics.txt`。
 - **レイアウト**: `layout.dim` は channel-major（`C × H × W` を C 順に flatten）に合わせる。  
   - `dim[0]`: `label=channel`, `size=C`, `stride=H*W`  
   - `dim[1]`: `label=height`, `size=H`, `stride=W`  
