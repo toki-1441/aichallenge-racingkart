@@ -1,7 +1,7 @@
 defaults:
   - _self_
 
-# Keep process cwd at launch dir so relative train_dir/val_dir resolve to planner_bev/
+# train.py resolves relative paths from planner_bev/ (this file's package root), not the shell CWD.
 hydra:
   job:
     chdir: false
@@ -20,24 +20,27 @@ model:
   dropout: 0.1
 
 data:
-  train_dir: datasets/synthetic/train
-  val_dir: datasets/synthetic/val
+  train_dir: datasets/from_bag/train
+  val_dir: datasets/from_bag/val
 
 train:
   batch_size: 8
-  epochs: 30
+  epochs: 2000
   lr: 0.001
   weight_decay: 0.0001
   num_workers: 2
-  save_dir: checkpoints
+  save_dir: checkpoint_aux08
   log_dir: logs
   pretrained_path: null
-  early_stop_patience: 8
+  # 0 = run all train.epochs without val-plateau early stop (needed when epochs is very large).
+  early_stop_patience: 0
   loss:
     huber_beta: 0.1
     div_lambda: 0.01
     div_d_min: 0.5
     curv_lambda: 0.0
+    # >0 adds mean SmoothL1(all K heads, traj_gt) scaled by this λ (weak supervision for non-teacher heads).
+    aux_all_heads_lambda: 0.0
   tensorboard:
     batch_scalars_interval: 1
     log_grad_norm_every_batches: 1
