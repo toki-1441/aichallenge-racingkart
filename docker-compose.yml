@@ -25,6 +25,7 @@ x-autoware-base: &autoware-base
     - ./aichallenge:/aichallenge
     - ./remote:/remote
     - ./vehicle:/vehicle
+    - ./vehicle/cyclonedds.xml:/opt/autoware/cyclonedds.xml
     - /tmp/.X11-unix:/tmp/.X11-unix:rw
     # Audio (PipeWire/Pulse) socket access on the host
     - /run/user:/run/user:rw
@@ -42,6 +43,7 @@ x-autoware-eval-base: &autoware-eval-base
     - ./output:${OUTPUT_ROOT:-/output}
     # /aichallenge is baked into the eval image; intentionally not mounted here
     # - ./aichallenge:/aichallenge
+    - ./vehicle/cyclonedds.xml:/opt/autoware/cyclonedds.xml
     - /tmp/.X11-unix:/tmp/.X11-unix:rw
     # Audio (PipeWire/Pulse) socket access on the host
     - /run/user:/run/user:rw
@@ -59,6 +61,7 @@ x-racing_kart_interface-base: &racing_kart_interface-base
     - USER=${USER}
     - TZ=Asia/Tokyo
     - ROS_DISTRO=humble
+    - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}
     - NTRIP_USERNAME=${NTRIP_USERNAME:-}
     - NTRIP_PASSWORD=${NTRIP_PASSWORD:-}
   volumes:
@@ -76,7 +79,7 @@ services:
   # Autoware service
   autoware:
     <<: *autoware-base
-    command: ["bash", "-lc", "exec /aichallenge/run_autoware.bash ${RUN_MODE:-awsim} ${ROS_DOMAIN_ID:-1} ${LOG_DIR:-} >\"${LOG_DIR:-/output}/autoware.log\" 2>&1"]
+    command: ["bash", "-lc", "exec /aichallenge/run_autoware.bash ${RUN_MODE:-awsim} ${ROS_DOMAIN_ID:-1} ${LOG_DIR:-}"]
 
   # Autoware service
   autoware-build:
@@ -122,7 +125,7 @@ services:
   zenoh:
     <<: *autoware-base
     working_dir: /vehicle
-    command: ["bash", "-c", "case ${VEHICLE_ID:-} in A2) PORT=7448;; A3) PORT=7449;; A6) PORT=7450;; A7) PORT=7451;; *) echo 'Invalid VEHICLE_ID'; exit 1;; esac && zenoh-bridge-ros2dds client -e tls/zenoh.dev.aichallenge-board.jsae.or.jp:$$PORT -c /vehicle/zenoh.json5"]
+    command: ["bash", "-c", "case ${VEHICLE_ID:-} in A2) PORT=7448;; A3) PORT=7449;; A6) PORT=7450;; A7) PORT=7451;; A1) PORT=7452;; A5) PORT=7453;; A8) PORT=7454;; *) echo 'Invalid VEHICLE_ID'; exit 1;; esac && zenoh-bridge-ros2dds client -e tls/13.231.141.103:$$PORT -c /vehicle/zenoh.json5"]
 
   # Driver service
   driver:
