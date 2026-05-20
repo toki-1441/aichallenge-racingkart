@@ -1,0 +1,13 @@
+# P1 planner dataset — default topics for ros2 bag record
+# One fully-qualified topic per line. Blank lines and # comments ignored.
+# Matches design_docs/planner_rosbag_recording.md (minimal + recommended).
+
+/clock
+/tf
+/tf_static
+/bev_scene_stack/tensor
+/mpc/prediction
+/planning/scenario_planning/trajectory
+/localization/kinematic_state
+/aichallenge/objects
+/parameter_events

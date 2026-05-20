@@ -1,0 +1,53 @@
+defaults:
+  - _self_
+
+# train.py resolves relative paths from planner_bev/ (this file's package root), not the shell CWD.
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: outputs/${now:%Y%m%d_%H%M%S}
+
+model:
+  h_bev: 256
+  w_bev: 144
+  c_in: 4
+  aux_dim: 0
+  num_heads: 4
+  horizon: 40
+  stem_channels: [32, 64, 128, 256]
+  embed_dim: 256
+  dropout: 0.1
+
+data:
+  train_dir: datasets/from_bag/train
+  val_dir: datasets/from_bag/val
+
+train:
+  batch_size: 8
+  epochs: 2000
+  lr: 0.001
+  weight_decay: 0.0001
+  num_workers: 2
+  save_dir: checkpoint_aux08
+  log_dir: logs
+  pretrained_path: null
+  # 0 = run all train.epochs without val-plateau early stop (needed when epochs is very large).
+  early_stop_patience: 0
+  loss:
+    huber_beta: 0.1
+    div_lambda: 0.01
+    div_d_min: 0.5
+    curv_lambda: 0.0
+    # >0 adds mean SmoothL1(all K heads, traj_gt) scaled by this λ (weak supervision for non-teacher heads).
+    aux_all_heads_lambda: 0.0
+  tensorboard:
+    batch_scalars_interval: 1
+    log_grad_norm_every_batches: 1
+    log_grad_hist_every_epochs: 1
+    log_weight_hist_every_epochs: 1
+    log_bev_every_epochs: 1
+    log_traj_figure_every_epochs: 1
+    weight_histogram_substrings: [conv, fuse, heads]
+    bev_preview_max_side: 400
+    log_graph: false
