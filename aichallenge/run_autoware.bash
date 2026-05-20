@@ -2,7 +2,8 @@
 
 mode="${1}"
 id="${2:-${ROS_DOMAIN_ID:-0}}"
-out_dir="${3:-/output/$(date +%Y%m%d-%H%M%S)/d${id}}"
+out_dir="${3:+${3}/d${id}}"
+out_dir="${out_dir:-/output/$(date +%Y%m%d-%H%M%S)/d${id}}"
 
 case "${mode}" in
 "awsim")
@@ -27,6 +28,7 @@ export ROS_DOMAIN_ID=$id
 use_cpp_mpc="${USE_CPP_MPC:-true}"
 
 mkdir -p "${out_dir}"
+exec >"${out_dir}/autoware.log" 2>&1
 trap 'bash /aichallenge/utils/fix_ownership.bash "${HOST_UID}" "${HOST_GID}" /output "$(dirname "${out_dir}")"' EXIT
 
 cd "${out_dir}" || exit
