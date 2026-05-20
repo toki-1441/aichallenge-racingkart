@@ -24,6 +24,7 @@ case "${mode}" in
 esac
 
 export ROS_DOMAIN_ID=$id
+use_cpp_mpc="${USE_CPP_MPC:-true}"
 
 mkdir -p "${out_dir}"
 trap 'bash /aichallenge/utils/fix_ownership.bash "${HOST_UID}" "${HOST_GID}" /output "$(dirname "${out_dir}")"' EXIT
@@ -34,4 +35,4 @@ export ROS_HOME="${out_dir}/ros"
 export ROS_LOG_DIR="${ROS_HOME}/log"
 mkdir -p "${ROS_LOG_DIR}"
 
-ros2 launch aichallenge_system_launch aichallenge_system.launch.xml "${opts[@]}" "domain_id:=$id"
+ros2 launch aichallenge_system_launch aichallenge_system.launch.xml "${opts[@]}" "domain_id:=$id" "use_cpp_mpc:=${use_cpp_mpc}"
