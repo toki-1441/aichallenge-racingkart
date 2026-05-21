@@ -58,6 +58,7 @@ install(PROGRAMS
   scripts/mpc_controller
   scripts/mpc_simulation
   scripts/obstacle_parser.py
+  scripts/plot_reference_csv.py
   scripts/path_constraints_provider
   scripts/publish_initialpose
   scripts/publish_initialpose_gnss
