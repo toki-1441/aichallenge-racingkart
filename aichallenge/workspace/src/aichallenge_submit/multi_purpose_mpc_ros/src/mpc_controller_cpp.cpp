@@ -1,0 +1,1912 @@
+#include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <cstdint>
+#include <cmath>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <memory>
+#include <numeric>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+#include <Eigen/Dense>
+#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <autoware_auto_control_msgs/msg/ackermann_control_command.hpp>
+#include <geometry_msgs/msg/point.hpp>
+#include <multi_purpose_mpc_ros_msgs/msg/ackermann_control_boost_command.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <osqp.h>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <rclcpp/qos.hpp>
+#include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/empty.hpp>
+#include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/color_rgba.hpp>
+#include <std_msgs/msg/float32_multi_array.hpp>
+#include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
+#include <yaml-cpp/yaml.h>
+
+namespace
+{
+
+using AckermannControlCommand = autoware_auto_control_msgs::msg::AckermannControlCommand;
+using AckermannControlBoostCommand = multi_purpose_mpc_ros_msgs::msg::AckermannControlBoostCommand;
+using Marker = visualization_msgs::msg::Marker;
+using MarkerArray = visualization_msgs::msg::MarkerArray;
+
+constexpr double kPi = 3.14159265358979323846;
+constexpr int kNx = 3;
+constexpr int kNu = 2;
+
+double wrap_pi(const double value)
+{
+  double wrapped = std::fmod(value + kPi, 2.0 * kPi);
+  if (wrapped < 0.0) {
+    wrapped += 2.0 * kPi;
+  }
+  return wrapped - kPi;
+}
+
+double kmh_to_mps(const double kmh) { return kmh / 3.6; }
+
+double yaw_from_quaternion(const geometry_msgs::msg::Quaternion & q)
+{
+  const double sqx = q.x * q.x;
+  const double sqy = q.y * q.y;
+  const double sqz = q.z * q.z;
+  const double sqw = q.w * q.w;
+  const double sarg = -2.0 * (q.x * q.z - q.w * q.y) / (sqx + sqy + sqz + sqw);
+  if (sarg <= -0.99999) {
+    return -2.0 * std::atan2(q.y, q.x);
+  }
+  if (sarg >= 0.99999) {
+    return 2.0 * std::atan2(q.y, q.x);
+  }
+  return std::atan2(2.0 * (q.x * q.y + q.w * q.z), sqw + sqx - sqy - sqz);
+}
+
+std::vector<std::string> split_csv_line(const std::string & line)
+{
+  std::vector<std::string> values;
+  std::stringstream ss(line);
+  std::string value;
+  while (std::getline(ss, value, ',')) {
+    while (!value.empty() && (value.back() == '\r' || value.back() == '\n' || value.back() == ' ')) {
+      value.pop_back();
+    }
+    while (!value.empty() && value.front() == ' ') {
+      value.erase(value.begin());
+    }
+    values.push_back(value);
+  }
+  return values;
+}
+
+struct Waypoint
+{
+  double x{};
+  double y{};
+  double psi{};
+  double kappa{};
+  double ub{};
+  double lb{};
+  double v_ref{};
+};
+
+struct SpatialState
+{
+  double e_y{};
+  double e_psi{};
+  double t{};
+};
+
+struct TemporalState
+{
+  double x{};
+  double y{};
+  double psi{};
+};
+
+struct RefVelSection
+{
+  int wp_id{};
+  double ref_vel_kmh{};
+};
+
+class OccupancyMap
+{
+public:
+  explicit OccupancyMap(const std::string & yaml_path)
+  {
+    const YAML::Node map_yaml = YAML::LoadFile(yaml_path);
+    occupied_thresh_ = map_yaml["occupied_thresh"].as<double>();
+    resolution_ = map_yaml["resolution"].as<double>();
+    origin_x_ = map_yaml["origin"][0].as<double>();
+    origin_y_ = map_yaml["origin"][1].as<double>();
+
+    const auto slash = yaml_path.find_last_of('/');
+    const std::string base_path = slash == std::string::npos ? std::string(".") : yaml_path.substr(0, slash);
+    load_pgm(base_path + "/" + map_yaml["image"].as<std::string>());
+  }
+
+  std::pair<int, int> w2m(const double x, const double y) const
+  {
+    int dx = static_cast<int>((x - origin_x_) / resolution_ + 0.5);
+    int dy = static_cast<int>((height_ - 1) - (y - origin_y_) / resolution_ + 0.5);
+    dx = std::clamp(dx, 0, width_ - 1);
+    dy = std::clamp(dy, 0, height_ - 1);
+    return {dx, dy};
+  }
+
+  std::pair<double, double> m2w(const int dx, const int dy) const
+  {
+    const double x = static_cast<int>(dx + 0.5) * resolution_ + origin_x_;
+    const double y = (height_ - 1 - static_cast<int>(dy + 0.5)) * resolution_ + origin_y_;
+    return {x, y};
+  }
+
+  std::pair<double, std::pair<double, double>> get_min_width(
+    const double wp_x_w, const double wp_y_w, const int wp_x, const int wp_y, const int target_x,
+    const int target_y, const double max_width) const
+  {
+    double min_width = max_width;
+    std::pair<double, double> min_cell = m2w(target_x, target_y);
+    std::vector<std::pair<int, int>> free_cells;
+
+    for (int dx = -1; dx <= 1; ++dx) {
+      for (int dy = -1; dy <= 1; ++dy) {
+        const int tx = std::clamp(target_x + dx, 0, width_ - 1);
+        const int ty = std::clamp(target_y + dy, 0, height_ - 1);
+        const auto cells = raster_line(wp_x, wp_y, tx, ty);
+        for (const auto & cell : cells) {
+          if (!is_free(cell.first, cell.second)) {
+            min_cell = m2w(cell.first, cell.second);
+            min_width = std::hypot(wp_x_w - min_cell.first, wp_y_w - min_cell.second);
+            return {min_width, min_cell};
+          }
+          free_cells.push_back(cell);
+        }
+      }
+    }
+
+    if (!free_cells.empty()) {
+      auto best = free_cells.front();
+      double best_dist = std::numeric_limits<double>::infinity();
+      for (const auto & cell : free_cells) {
+        const double dist = std::hypot(
+          static_cast<double>(cell.first - target_x), static_cast<double>(cell.second - target_y));
+        if (dist < best_dist) {
+          best_dist = dist;
+          best = cell;
+        }
+      }
+      min_cell = m2w(best.first, best.second);
+      min_width = std::hypot(wp_x_w - min_cell.first, wp_y_w - min_cell.second);
+    }
+    return {min_width, min_cell};
+  }
+
+private:
+  bool is_free(const int x, const int y) const
+  {
+    const int cx = std::clamp(x, 0, width_ - 1);
+    const int cy = std::clamp(y, 0, height_ - 1);
+    return data_.at(cy * width_ + cx) != 0;
+  }
+
+  static std::string read_token(std::istream & input)
+  {
+    std::string token;
+    while (input >> token) {
+      if (!token.empty() && token.front() == '#') {
+        std::string ignored;
+        std::getline(input, ignored);
+        continue;
+      }
+      return token;
+    }
+    throw std::runtime_error("unexpected EOF while reading PGM");
+  }
+
+  void load_pgm(const std::string & pgm_path)
+  {
+    std::ifstream file(pgm_path, std::ios::binary);
+    if (!file) {
+      throw std::runtime_error("failed to open PGM: " + pgm_path);
+    }
+    const std::string magic = read_token(file);
+    if (magic != "P5" && magic != "P2") {
+      throw std::runtime_error("unsupported PGM format: " + magic);
+    }
+    width_ = std::stoi(read_token(file));
+    height_ = std::stoi(read_token(file));
+    const int max_value = std::stoi(read_token(file));
+    data_.assign(width_ * height_, 0);
+
+    if (magic == "P5") {
+      file.get();
+      std::vector<unsigned char> raw(width_ * height_);
+      file.read(reinterpret_cast<char *>(raw.data()), static_cast<std::streamsize>(raw.size()));
+      for (size_t idx = 0; idx < raw.size(); ++idx) {
+        const double value = static_cast<double>(raw.at(idx)) / static_cast<double>(max_value);
+        data_.at(idx) = value >= occupied_thresh_ ? 1 : 0;
+      }
+      return;
+    }
+
+    for (int idx = 0; idx < width_ * height_; ++idx) {
+      const double value = std::stod(read_token(file)) / static_cast<double>(max_value);
+      data_.at(idx) = value >= occupied_thresh_ ? 1 : 0;
+    }
+  }
+
+  static std::vector<std::pair<int, int>> raster_line(int x0, int y0, const int x1, const int y1)
+  {
+    std::vector<std::pair<int, int>> cells;
+    const int dx = std::abs(x1 - x0);
+    const int sx = x0 < x1 ? 1 : -1;
+    const int dy = -std::abs(y1 - y0);
+    const int sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    while (true) {
+      cells.emplace_back(x0, y0);
+      if (x0 == x1 && y0 == y1) {
+        break;
+      }
+      const int e2 = 2 * err;
+      if (e2 >= dy) {
+        err += dy;
+        x0 += sx;
+      }
+      if (e2 <= dx) {
+        err += dx;
+        y0 += sy;
+      }
+    }
+    return cells;
+  }
+
+  int width_{};
+  int height_{};
+  double resolution_{};
+  double origin_x_{};
+  double origin_y_{};
+  double occupied_thresh_{};
+  std::vector<std::uint8_t> data_;
+};
+
+class ReferencePath
+{
+public:
+  ReferencePath(
+    const OccupancyMap * map, const std::vector<double> & input_x, const std::vector<double> & input_y,
+    const double resolution, const int smoothing_distance, const double max_width, const bool circular)
+  : resolution_(resolution),
+    smoothing_distance_(smoothing_distance),
+    max_width_(max_width),
+    circular_(circular)
+  {
+    construct_path(input_x, input_y);
+    compute_width(map);
+    set_v_ref(std::vector<double>(waypoints_.size(), 0.0));
+    compute_segment_lengths();
+    update_simple_path_constraints(20, 0.0);
+  }
+
+  const Waypoint & get_waypoint(const int index) const
+  {
+    if (circular_) {
+      const int size = static_cast<int>(waypoints_.size());
+      int wrapped = index % size;
+      if (wrapped < 0) {
+        wrapped += size;
+      }
+      return waypoints_.at(wrapped);
+    }
+    const int clipped = std::clamp(index, 0, static_cast<int>(waypoints_.size()) - 1);
+    return waypoints_.at(clipped);
+  }
+
+  double segment_length(const int index) const
+  {
+    const int clipped = std::clamp(index, 0, static_cast<int>(segment_lengths_.size()) - 1);
+    return segment_lengths_.at(clipped);
+  }
+
+  int size() const { return static_cast<int>(waypoints_.size()); }
+
+  const std::vector<Waypoint> & waypoints() const { return waypoints_; }
+
+  const std::vector<double> & cumulative_lengths() const { return cumulative_lengths_; }
+
+  std::pair<std::vector<double>, std::vector<double>> get_path_constraints(
+    const int ref_wp_id, const int horizon, const double safety_margin) const
+  {
+    (void)safety_margin;
+    std::vector<double> ub;
+    std::vector<double> lb;
+    ub.reserve(horizon);
+    lb.reserve(horizon);
+    const int rows = std::max(1, size() - 1);
+    const int row = ((ref_wp_id % rows) + rows) % rows;
+    for (int n = 0; n < horizon; ++n) {
+      const double raw_ub = path_ub_.at(row).at(n);
+      const double raw_lb = path_lb_.at(row).at(n);
+      if (raw_ub < raw_lb) {
+        ub.push_back(0.0);
+        lb.push_back(0.0);
+      } else {
+        ub.push_back(raw_ub);
+        lb.push_back(raw_lb);
+      }
+    }
+    return {ub, lb};
+  }
+
+  void set_v_ref(const std::vector<double> & v_ref)
+  {
+    for (size_t i = 0; i < waypoints_.size(); ++i) {
+      waypoints_.at(i).v_ref = v_ref.at(std::min(i, v_ref.size() - 1));
+    }
+  }
+
+  void compute_speed_profile(
+    const double a_min, const double a_max, const double v_min, const double v_max, const double ay_max)
+  {
+    const int horizon = size() - 1;
+    if (horizon < 2) {
+      return;
+    }
+
+    std::vector<double> v_max_dyn(horizon, v_max);
+    std::vector<double> segment_lengths(horizon, 0.0);
+    for (int i = 0; i < horizon; ++i) {
+      const auto & current = get_waypoint(i);
+      const auto & next = get_waypoint(i + 1);
+      segment_lengths.at(i) = std::hypot(next.x - current.x, next.y - current.y);
+      const double kappa = std::abs(current.kappa);
+      const double v_dyn = std::sqrt(ay_max / (kappa + 1.0e-12));
+      if (v_dyn < v_max_dyn.at(i)) {
+        v_max_dyn.at(i) = v_dyn;
+      }
+    }
+
+    std::vector<c_float> p_x(horizon, 1.0);
+    std::vector<c_int> p_i(horizon, 0);
+    std::vector<c_int> p_p(horizon + 1, 0);
+    std::vector<c_float> q(horizon, 0.0);
+    for (int i = 0; i < horizon; ++i) {
+      p_i.at(i) = i;
+      p_p.at(i) = i;
+      q.at(i) = -v_max_dyn.at(i);
+    }
+    p_p.at(horizon) = horizon;
+
+    std::vector<std::tuple<int, int, double>> d_triplets;
+    d_triplets.reserve(3 * horizon - 2);
+    for (int i = 0; i < horizon - 1; ++i) {
+      const double coeff = 1.0 / (2.0 * segment_lengths.at(i));
+      d_triplets.emplace_back(i, i, -coeff);
+      d_triplets.emplace_back(i, i + 1, coeff);
+    }
+    for (int i = 0; i < horizon; ++i) {
+      d_triplets.emplace_back((horizon - 1) + i, i, 1.0);
+    }
+    std::stable_sort(d_triplets.begin(), d_triplets.end(), [](const auto & lhs, const auto & rhs) {
+      if (std::get<1>(lhs) == std::get<1>(rhs)) {
+        return std::get<0>(lhs) < std::get<0>(rhs);
+      }
+      return std::get<1>(lhs) < std::get<1>(rhs);
+    });
+
+    const int n_constraints = (horizon - 1) + horizon;
+    std::vector<c_float> a_x;
+    std::vector<c_int> a_i;
+    std::vector<c_int> a_p(horizon + 1, 0);
+    a_x.reserve(d_triplets.size());
+    a_i.reserve(d_triplets.size());
+    int current_col = 0;
+    for (const auto & [row, col, value] : d_triplets) {
+      while (current_col < col) {
+        a_p.at(current_col + 1) = static_cast<c_int>(a_x.size());
+        ++current_col;
+      }
+      a_i.push_back(static_cast<c_int>(row));
+      a_x.push_back(static_cast<c_float>(value));
+    }
+    while (current_col < horizon) {
+      a_p.at(current_col + 1) = static_cast<c_int>(a_x.size());
+      ++current_col;
+    }
+
+    std::vector<c_float> lower(n_constraints, 0.0);
+    std::vector<c_float> upper(n_constraints, 0.0);
+    for (int i = 0; i < horizon - 1; ++i) {
+      lower.at(i) = a_min;
+      upper.at(i) = a_max;
+    }
+    for (int i = 0; i < horizon; ++i) {
+      lower.at((horizon - 1) + i) = v_min;
+      upper.at((horizon - 1) + i) = v_max_dyn.at(i);
+    }
+
+    csc * p_mat = csc_matrix(horizon, horizon, horizon, p_x.data(), p_i.data(), p_p.data());
+    csc * a_mat = csc_matrix(
+      n_constraints, horizon, static_cast<c_int>(a_x.size()), a_x.data(), a_i.data(), a_p.data());
+    OSQPData data{};
+    data.n = horizon;
+    data.m = n_constraints;
+    data.P = p_mat;
+    data.q = q.data();
+    data.A = a_mat;
+    data.l = lower.data();
+    data.u = upper.data();
+    OSQPSettings settings{};
+    osqp_set_default_settings(&settings);
+    settings.verbose = false;
+
+    OSQPWorkspace * work = nullptr;
+    const c_int setup_status = osqp_setup(&work, &data, &settings);
+    if (setup_status == 0 && work != nullptr && osqp_solve(work) == 0 && work->solution != nullptr &&
+      work->solution->x != nullptr)
+    {
+      for (int i = 0; i < horizon; ++i) {
+        waypoints_.at(i).v_ref = work->solution->x[i];
+      }
+      waypoints_.back().v_ref = circular_ ? waypoints_.at(waypoints_.size() - 2).v_ref : 0.0;
+    } else {
+      std::vector<double> fallback(waypoints_.size(), v_max);
+      set_v_ref(fallback);
+    }
+    if (work != nullptr) {
+      osqp_cleanup(work);
+    }
+    c_free(p_mat);
+    c_free(a_mat);
+  }
+
+  void update_simple_path_constraints(const int horizon, const double safety_margin)
+  {
+    const int rows = std::max(1, size() - 1);
+    path_ub_.assign(rows, std::vector<double>(horizon, 0.0));
+    path_lb_.assign(rows, std::vector<double>(horizon, 0.0));
+    for (int wp_id = 0; wp_id < rows; ++wp_id) {
+      for (int n = 0; n < horizon; ++n) {
+        const auto & wp = get_waypoint(wp_id + n);
+        double ub = wp.ub - safety_margin;
+        double lb = wp.lb + safety_margin;
+        if (ub < lb) {
+          ub = 0.0;
+          lb = 0.0;
+        }
+        path_ub_.at(wp_id).at(n) = ub;
+        path_lb_.at(wp_id).at(n) = lb;
+      }
+    }
+  }
+
+  bool load_width_constraints_csv(const std::string & csv_path)
+  {
+    std::ifstream file(csv_path);
+    if (!file) {
+      return false;
+    }
+    std::string header;
+    std::getline(file, header);
+    const auto columns = split_csv_line(header);
+    const auto find_index = [&](const std::string & name) {
+      const auto it = std::find(columns.begin(), columns.end(), name);
+      if (it == columns.end()) {
+        throw std::runtime_error("missing constraints CSV column: " + name);
+      }
+      return static_cast<int>(std::distance(columns.begin(), it));
+    };
+    const int wp_idx = find_index("wp_id");
+    const int ub_idx = find_index("ub");
+    const int lb_idx = find_index("lb");
+    std::string line;
+    int loaded = 0;
+    while (std::getline(file, line)) {
+      if (line.empty()) {
+        continue;
+      }
+      const auto values = split_csv_line(line);
+      const int wp_id = std::stoi(values.at(wp_idx));
+      if (wp_id < 0 || wp_id >= static_cast<int>(waypoints_.size())) {
+        continue;
+      }
+      waypoints_.at(wp_id).ub = std::stod(values.at(ub_idx));
+      waypoints_.at(wp_id).lb = std::stod(values.at(lb_idx));
+      ++loaded;
+    }
+    return loaded == static_cast<int>(waypoints_.size());
+  }
+
+private:
+  void construct_path(std::vector<double> wp_x, std::vector<double> wp_y)
+  {
+    if (circular_) {
+      const int append_count = std::min<int>(static_cast<int>(wp_x.size()), smoothing_distance_ * 3);
+      for (int i = 0; i < append_count; ++i) {
+        wp_x.push_back(wp_x.at(i));
+        wp_y.push_back(wp_y.at(i));
+      }
+    }
+
+    std::vector<double> dense_x;
+    std::vector<double> dense_y;
+    for (size_t i = 0; i + 1 < wp_x.size(); ++i) {
+      const double dx = wp_x.at(i + 1) - wp_x.at(i);
+      const double dy = wp_y.at(i + 1) - wp_y.at(i);
+      const int n_wp = std::max(1, static_cast<int>(std::hypot(dx, dy) / resolution_));
+      for (int j = 0; j < n_wp; ++j) {
+        const double ratio = static_cast<double>(j) / static_cast<double>(n_wp);
+        dense_x.push_back(wp_x.at(i) + ratio * dx);
+        dense_y.push_back(wp_y.at(i) + ratio * dy);
+      }
+    }
+    dense_x.push_back(wp_x.back());
+    dense_y.push_back(wp_y.back());
+
+    std::vector<std::pair<double, double>> smoothed;
+    for (int i = smoothing_distance_; i < static_cast<int>(dense_x.size()) - smoothing_distance_; ++i) {
+      double sx = 0.0;
+      double sy = 0.0;
+      for (int j = i - smoothing_distance_; j <= i + smoothing_distance_; ++j) {
+        sx += dense_x.at(j);
+        sy += dense_y.at(j);
+      }
+      const double denom = static_cast<double>(2 * smoothing_distance_ + 1);
+      smoothed.emplace_back(sx / denom, sy / denom);
+    }
+
+    waypoints_.clear();
+    for (size_t i = 0; i + 1 < smoothed.size(); ++i) {
+      const auto current = smoothed.at(i);
+      const auto next = smoothed.at(i + 1);
+      const double dx = next.first - current.first;
+      const double dy = next.second - current.second;
+      const double psi = std::atan2(dy, dx);
+      const double dist_ahead = std::hypot(dx, dy);
+      double kappa = 0.0;
+      if (i > 0) {
+        const auto prev = smoothed.at(i - 1);
+        const double angle_behind = std::atan2(current.second - prev.second, current.first - prev.first);
+        kappa = wrap_pi(psi - angle_behind) / (dist_ahead + 1.0e-12);
+      }
+      waypoints_.push_back(Waypoint{current.first, current.second, psi, kappa, max_width_, -max_width_, 0.0});
+    }
+  }
+
+  void compute_width(const OccupancyMap * map)
+  {
+    if (map == nullptr) {
+      return;
+    }
+    for (auto & wp : waypoints_) {
+      const double left_angle = wrap_pi(wp.psi + kPi / 2.0);
+      const double right_angle = wrap_pi(wp.psi - kPi / 2.0);
+      const auto [wp_mx, wp_my] = map->w2m(wp.x, wp.y);
+      const auto [wp_x_w, wp_y_w] = map->m2w(wp_mx, wp_my);
+
+      const auto [left_tx, left_ty] =
+        map->w2m(wp_x_w + max_width_ * std::cos(left_angle), wp_y_w + max_width_ * std::sin(left_angle));
+      const auto [right_tx, right_ty] =
+        map->w2m(wp_x_w + max_width_ * std::cos(right_angle), wp_y_w + max_width_ * std::sin(right_angle));
+
+      const auto [left_width, left_cell] =
+        map->get_min_width(wp_x_w, wp_y_w, wp_mx, wp_my, left_tx, left_ty, max_width_);
+      const auto [right_width, right_cell] =
+        map->get_min_width(wp_x_w, wp_y_w, wp_mx, wp_my, right_tx, right_ty, max_width_);
+      (void)left_cell;
+      (void)right_cell;
+      wp.ub = left_width;
+      wp.lb = -right_width;
+    }
+  }
+
+  void compute_segment_lengths()
+  {
+    segment_lengths_.assign(waypoints_.size(), 0.0);
+    cumulative_lengths_.assign(waypoints_.size(), 0.0);
+    for (size_t i = 1; i < waypoints_.size(); ++i) {
+      segment_lengths_.at(i) = std::hypot(
+        waypoints_.at(i).x - waypoints_.at(i - 1).x, waypoints_.at(i).y - waypoints_.at(i - 1).y);
+      cumulative_lengths_.at(i) = cumulative_lengths_.at(i - 1) + segment_lengths_.at(i);
+    }
+  }
+
+  double resolution_{};
+  int smoothing_distance_{};
+  double max_width_{};
+  bool circular_{};
+  std::vector<Waypoint> waypoints_;
+  std::vector<double> segment_lengths_;
+  std::vector<double> cumulative_lengths_;
+  std::vector<std::vector<double>> path_ub_;
+  std::vector<std::vector<double>> path_lb_;
+};
+
+class BicycleModel
+{
+public:
+  BicycleModel(ReferencePath * reference_path, const double length, const double width, const double ts)
+  : reference_path_(reference_path),
+    length_(length),
+    width_(width),
+    safety_margin_(width / std::sqrt(2.0)),
+    ts_(ts)
+  {
+    current_waypoint_ = &reference_path_->get_waypoint(wp_id_);
+    temporal_state_ = s2t(*current_waypoint_, spatial_state_);
+  }
+
+  ReferencePath & reference_path() { return *reference_path_; }
+  const ReferencePath & reference_path() const { return *reference_path_; }
+  double length() const { return length_; }
+  double width() const { return width_; }
+  double safety_margin() const { return safety_margin_; }
+  double ts() const { return ts_; }
+  int wp_id() const { return wp_id_; }
+  void set_wp_id(const int wp_id) { wp_id_ = wp_id; }
+  const SpatialState & spatial_state() const { return spatial_state_; }
+  const TemporalState & temporal_state() const { return temporal_state_; }
+
+  void update_states(const double x, const double y, const double psi)
+  {
+    temporal_state_ = TemporalState{x, y, psi};
+    wp_id_ = get_closest_waypoint(x, y);
+    s_ = get_s_at_waypoint(wp_id_);
+    current_waypoint_ = &reference_path_->get_waypoint(wp_id_);
+  }
+
+  void update_current_waypoint()
+  {
+    const auto & length_cum = reference_path_->cumulative_lengths();
+    const auto it = std::upper_bound(length_cum.begin(), length_cum.end(), s_);
+    int next_wp_id = static_cast<int>(std::distance(length_cum.begin(), it));
+    if (next_wp_id >= static_cast<int>(length_cum.size())) {
+      wp_id_ = static_cast<int>(length_cum.size()) - 1;
+      current_waypoint_ = &reference_path_->get_waypoint(wp_id_);
+      return;
+    }
+    const int prev_wp_id = next_wp_id - 1;
+    const double s_next = length_cum.at(next_wp_id);
+    const double s_prev = length_cum.at(std::max(0, prev_wp_id));
+    if (std::abs(s_ - s_next) < std::abs(s_ - s_prev)) {
+      wp_id_ = next_wp_id;
+    } else {
+      wp_id_ = std::max(0, prev_wp_id);
+    }
+    current_waypoint_ = &reference_path_->get_waypoint(wp_id_);
+  }
+
+  SpatialState t2s(const Waypoint & reference_waypoint, const TemporalState & state) const
+  {
+    const double e_y = std::cos(reference_waypoint.psi) * (state.y - reference_waypoint.y) -
+                       std::sin(reference_waypoint.psi) * (state.x - reference_waypoint.x);
+    const double e_psi = wrap_pi(state.psi - reference_waypoint.psi);
+    return SpatialState{e_y, e_psi, 0.0};
+  }
+
+  TemporalState s2t(const Waypoint & reference_waypoint, const SpatialState & state) const
+  {
+    const double x = reference_waypoint.x - state.e_y * std::sin(reference_waypoint.psi);
+    const double y = reference_waypoint.y + state.e_y * std::cos(reference_waypoint.psi);
+    const double psi = reference_waypoint.psi + state.e_psi;
+    return TemporalState{x, y, psi};
+  }
+
+  void update_spatial_state()
+  {
+    spatial_state_ = t2s(*current_waypoint_, temporal_state_);
+  }
+
+  void drive(const double v, const double delta)
+  {
+    temporal_state_.x += v * std::cos(temporal_state_.psi) * ts_;
+    temporal_state_.y += v * std::sin(temporal_state_.psi) * ts_;
+    temporal_state_.psi += v / length_ * std::tan(delta) * ts_;
+    const double s_dot = v * std::cos(spatial_state_.e_psi) /
+                         (1.0 - spatial_state_.e_y * current_waypoint_->kappa);
+    s_ += s_dot * ts_;
+  }
+
+  std::tuple<Eigen::Vector3d, Eigen::Matrix3d, Eigen::Matrix<double, 3, 2>> linearize(
+    const double v_ref, const double kappa_ref, const double delta_s) const
+  {
+    Eigen::Vector3d f;
+    Eigen::Matrix3d a = Eigen::Matrix3d::Zero();
+    Eigen::Matrix<double, 3, 2> b = Eigen::Matrix<double, 3, 2>::Zero();
+
+    a.row(0) << 1.0, delta_s, 0.0;
+    a.row(1) << -kappa_ref * kappa_ref * delta_s, 1.0, 0.0;
+    b.row(0) << 0.0, 0.0;
+    b.row(1) << 0.0, delta_s;
+    if (v_ref == 0.0) {
+      a.row(2) << 0.0, 0.0, 1.0;
+      b.row(2) << 0.0, 0.0;
+      f << 0.0, 0.0, 0.0;
+    } else {
+      a.row(2) << -kappa_ref / v_ref * delta_s, 0.0, 1.0;
+      b.row(2) << -1.0 / (v_ref * v_ref) * delta_s, 0.0;
+      f << 0.0, 0.0, 1.0 / v_ref * delta_s;
+    }
+    return {f, a, b};
+  }
+
+private:
+  int get_closest_waypoint(const double x, const double y) const
+  {
+    int closest = 0;
+    double best = std::numeric_limits<double>::infinity();
+    for (int i = 0; i < reference_path_->size(); ++i) {
+      const auto & wp = reference_path_->get_waypoint(i);
+      const double dist = std::hypot(wp.x - x, wp.y - y);
+      if (dist < best) {
+        best = dist;
+        closest = i;
+      }
+    }
+    return closest;
+  }
+
+  double get_s_at_waypoint(const int wp_id) const
+  {
+    const auto & length_cum = reference_path_->cumulative_lengths();
+    return length_cum.at(std::clamp(wp_id, 0, static_cast<int>(length_cum.size()) - 1));
+  }
+
+  ReferencePath * reference_path_{};
+  double length_{};
+  double width_{};
+  double safety_margin_{};
+  double ts_{};
+  double s_{};
+  int wp_id_{};
+  SpatialState spatial_state_;
+  TemporalState temporal_state_;
+  const Waypoint * current_waypoint_{};
+};
+
+struct SparseCsc
+{
+  int rows{};
+  int cols{};
+  std::vector<c_float> x;
+  std::vector<c_int> i;
+  std::vector<c_int> p;
+};
+
+SparseCsc build_csc_from_triplets(
+  const int rows, const int cols, std::vector<std::tuple<int, int, double>> triplets)
+{
+  std::stable_sort(triplets.begin(), triplets.end(), [](const auto & lhs, const auto & rhs) {
+    if (std::get<1>(lhs) == std::get<1>(rhs)) {
+      return std::get<0>(lhs) < std::get<0>(rhs);
+    }
+    return std::get<1>(lhs) < std::get<1>(rhs);
+  });
+
+  SparseCsc csc;
+  csc.rows = rows;
+  csc.cols = cols;
+  csc.p.assign(cols + 1, 0);
+  csc.x.reserve(triplets.size());
+  csc.i.reserve(triplets.size());
+  int current_col = 0;
+  for (const auto & [row, col, value] : triplets) {
+    while (current_col < col) {
+      csc.p.at(current_col + 1) = static_cast<c_int>(csc.x.size());
+      ++current_col;
+    }
+    csc.i.push_back(static_cast<c_int>(row));
+    csc.x.push_back(static_cast<c_float>(value));
+  }
+  while (current_col < cols) {
+    csc.p.at(current_col + 1) = static_cast<c_int>(csc.x.size());
+    ++current_col;
+  }
+  return csc;
+}
+
+class OsqpWorkspace
+{
+public:
+  ~OsqpWorkspace() { cleanup(); }
+
+  void setup(const SparseCsc & p, const std::vector<double> & q, const SparseCsc & a,
+    const std::vector<double> & l, const std::vector<double> & u)
+  {
+    cleanup();
+    p_x_ = p.x;
+    p_i_ = p.i;
+    p_p_ = p.p;
+    a_x_ = a.x;
+    a_i_ = a.i;
+    a_p_ = a.p;
+    q_ = to_c_float(q);
+    l_ = to_c_float(l);
+    u_ = to_c_float(u);
+
+    p_mat_ = csc_matrix(p.rows, p.cols, static_cast<c_int>(p_x_.size()), p_x_.data(), p_i_.data(), p_p_.data());
+    a_mat_ = csc_matrix(a.rows, a.cols, static_cast<c_int>(a_x_.size()), a_x_.data(), a_i_.data(), a_p_.data());
+
+    data_.n = p.cols;
+    data_.m = a.rows;
+    data_.P = p_mat_;
+    data_.q = q_.data();
+    data_.A = a_mat_;
+    data_.l = l_.data();
+    data_.u = u_.data();
+
+    osqp_set_default_settings(&settings_);
+    settings_.verbose = false;
+    settings_.warm_start = true;
+    settings_.eps_abs = 1.0e-8;
+    settings_.eps_rel = 1.0e-8;
+
+    OSQPWorkspace * raw_work = nullptr;
+    const c_int status = osqp_setup(&raw_work, &data_, &settings_);
+    if (status != 0 || raw_work == nullptr) {
+      throw std::runtime_error("osqp_setup failed");
+    }
+    work_ = raw_work;
+    p_nnz_ = static_cast<int>(p_x_.size());
+    a_nnz_ = static_cast<int>(a_x_.size());
+    initialized_ = true;
+  }
+
+  bool update(const std::vector<double> & q, const SparseCsc & a, const std::vector<double> & l,
+    const std::vector<double> & u)
+  {
+    if (!initialized_ || static_cast<int>(a.x.size()) != a_nnz_) {
+      return false;
+    }
+    q_ = to_c_float(q);
+    l_ = to_c_float(l);
+    u_ = to_c_float(u);
+    a_x_ = a.x;
+
+    const c_int q_status = osqp_update_lin_cost(work_, q_.data());
+    const c_int b_status = osqp_update_bounds(work_, l_.data(), u_.data());
+    const c_int a_status = osqp_update_A(work_, a_x_.data(), OSQP_NULL, static_cast<c_int>(a_x_.size()));
+    return q_status == 0 && b_status == 0 && a_status == 0;
+  }
+
+  std::vector<double> solve()
+  {
+    if (!initialized_) {
+      throw std::runtime_error("OSQP workspace is not initialized");
+    }
+    const c_int status = osqp_solve(work_);
+    const std::string solver_status =
+      work_->info != nullptr && work_->info->status != nullptr ? std::string(work_->info->status) : "unknown";
+    if (status != 0 || work_->solution == nullptr || work_->solution->x == nullptr || work_->info == nullptr) {
+      throw std::runtime_error("osqp_solve failed: " + solver_status);
+    }
+    if (solver_status.find("infeasible") != std::string::npos) {
+      throw std::runtime_error("osqp_solve failed: " + solver_status);
+    }
+    std::vector<double> solution(data_.n);
+    for (int idx = 0; idx < data_.n; ++idx) {
+      solution.at(idx) = work_->solution->x[idx];
+    }
+    return solution;
+  }
+
+  bool initialized() const { return initialized_; }
+  int p_nnz() const { return p_nnz_; }
+  int a_nnz() const { return a_nnz_; }
+
+private:
+  static std::vector<c_float> to_c_float(const std::vector<double> & source)
+  {
+    std::vector<c_float> result(source.size());
+    std::transform(source.begin(), source.end(), result.begin(), [](double v) { return static_cast<c_float>(v); });
+    return result;
+  }
+
+  void cleanup()
+  {
+    if (work_ != nullptr) {
+      osqp_cleanup(work_);
+      work_ = nullptr;
+    }
+    if (p_mat_ != nullptr) {
+      c_free(p_mat_);
+      p_mat_ = nullptr;
+    }
+    if (a_mat_ != nullptr) {
+      c_free(a_mat_);
+      a_mat_ = nullptr;
+    }
+    initialized_ = false;
+  }
+
+  OSQPWorkspace * work_{};
+  OSQPData data_{};
+  OSQPSettings settings_{};
+  csc * p_mat_{};
+  csc * a_mat_{};
+  std::vector<c_float> p_x_;
+  std::vector<c_int> p_i_;
+  std::vector<c_int> p_p_;
+  std::vector<c_float> a_x_;
+  std::vector<c_int> a_i_;
+  std::vector<c_int> a_p_;
+  std::vector<c_float> q_;
+  std::vector<c_float> l_;
+  std::vector<c_float> u_;
+  bool initialized_{};
+  int p_nnz_{};
+  int a_nnz_{};
+};
+
+struct MpcProblem
+{
+  SparseCsc p;
+  SparseCsc a;
+  std::vector<double> q;
+  std::vector<double> l;
+  std::vector<double> u;
+};
+
+class MpcSolver
+{
+public:
+  MpcSolver(BicycleModel * model, const YAML::Node & config)
+  : model_(model)
+  {
+    const auto mpc = config["mpc"];
+    n_ = mpc["N"].as<int>();
+    q_diag_ = mpc["Q"].as<std::vector<double>>();
+    r_diag_ = mpc["R"].as<std::vector<double>>();
+    qn_diag_ = mpc["QN"].as<std::vector<double>>();
+    v_max_ = kmh_to_mps(mpc["v_max"].as<double>());
+    a_min_ = mpc["a_min"].as<double>();
+    a_max_ = mpc["a_max"].as<double>();
+    ay_max_ = mpc["ay_max"].as<double>();
+    delta_max_ = mpc["delta_max_deg"].as<double>() * kPi / 180.0;
+    steering_rate_max_ = mpc["steer_rate_max"].as<double>() / mpc["steering_tire_angle_gain_var"].as<double>();
+    wp_id_offset_ = mpc["wp_id_offset"].as<int>();
+    use_max_kappa_pred_ = mpc["use_max_kappa_pred"].as<bool>();
+    current_control_.assign(kNu * n_, 0.0);
+  }
+
+  void update_v_max(const double v_max) { v_max_ = v_max; }
+  void update_ay_max(const double ay_max) { ay_max_ = ay_max; }
+  void update_wp_id_offset(const int wp_id_offset) { wp_id_offset_ = wp_id_offset; }
+  void update_q(const int index, const double value) { q_diag_.at(index) = value; }
+  void update_r(const int index, const double value) { r_diag_.at(index) = value; }
+  void update_qn(const int index, const double value) { qn_diag_.at(index) = value; }
+
+  MpcProblem debug_problem()
+  {
+    model_->update_current_waypoint();
+    model_->update_spatial_state();
+    return init_problem(n_, model_->safety_margin());
+  }
+
+  std::vector<double> debug_solve(const MpcProblem & problem)
+  {
+    OsqpWorkspace workspace;
+    workspace.setup(problem.p, problem.q, problem.a, problem.l, problem.u);
+    return workspace.solve();
+  }
+
+  std::pair<std::array<double, 2>, double> get_control()
+  {
+    model_->update_current_waypoint();
+    const int horizon = n_;
+    model_->update_spatial_state();
+    std::vector<double> solution;
+    std::vector<double> control_signals;
+    try {
+      MpcProblem problem = init_problem(horizon, model_->safety_margin());
+      workspace_.setup(problem.p, problem.q, problem.a, problem.l, problem.u);
+      solution = workspace_.solve();
+      control_signals.assign(solution.end() - horizon * kNu, solution.end());
+
+      bool all_use_control_signals = true;
+      for (int i = 1; i < static_cast<int>(control_signals.size()); i += 2) {
+        if (control_signals.at(i) == 0.0) {
+          all_use_control_signals = false;
+          break;
+        }
+      }
+
+      if (!all_use_control_signals) {
+        for (int i = 1; i < 6; ++i) {
+          const double relaxed_safety_margin = model_->safety_margin() * ((5.0 - static_cast<double>(i)) / 5.0);
+          problem = init_problem(horizon, relaxed_safety_margin);
+          workspace_.setup(problem.p, problem.q, problem.a, problem.l, problem.u);
+          solution = workspace_.solve();
+          control_signals.assign(solution.end() - horizon * kNu, solution.end());
+
+          all_use_control_signals = true;
+          for (int j = 1; j < static_cast<int>(control_signals.size()); j += 2) {
+            if (control_signals.at(j) == 0.0) {
+              all_use_control_signals = false;
+              break;
+            }
+          }
+          if (infeasibility_counter_ == 0 && all_use_control_signals) {
+            break;
+          }
+        }
+      }
+    } catch (const std::exception & error) {
+      if (infeasibility_counter_ % 40 == 0) {
+        std::cerr << "C++ MPC solve failed: " << error.what() << std::endl;
+      }
+      const int id = kNu * (infeasibility_counter_ + 1);
+      ++infeasibility_counter_;
+      if (id + 2 < static_cast<int>(current_control_.size())) {
+        return {{{current_control_.at(id), current_control_.at(id + 1)}}, std::abs(current_control_.at(id + 1))};
+      }
+      return {{{0.0, 0.0}}, 0.0};
+    }
+
+    for (int i = 1; i < static_cast<int>(control_signals.size()); i += 2) {
+      control_signals.at(i) = std::atan(control_signals.at(i) * model_->length());
+    }
+
+    double delta = control_signals.at(1);
+    const double max_delta_change = steering_rate_max_ * model_->ts();
+    delta = std::clamp(delta, previous_steering_ - max_delta_change, previous_steering_ + max_delta_change);
+    previous_steering_ = delta;
+
+    current_control_ = control_signals;
+    update_prediction(solution, horizon);
+
+    double max_delta = 0.0;
+    const int max_index = static_cast<int>(control_signals.size()) / 3 * 2;
+    for (int i = 1; i < max_index; i += 2) {
+      max_delta = std::max(max_delta, std::abs(control_signals.at(i)));
+    }
+    infeasibility_counter_ = 0;
+    return {{{control_signals.at(0), delta}}, max_delta};
+  }
+
+  const std::vector<double> & prediction_x() const { return prediction_x_; }
+  const std::vector<double> & prediction_y() const { return prediction_y_; }
+
+private:
+  MpcProblem init_problem(const int horizon, const double safety_margin)
+  {
+    const int nx_n = kNx * (horizon + 1);
+    const int nu_n = kNu * horizon;
+    const int nvar = nx_n + nu_n;
+    const int n_rate = horizon - 1;
+    const int n_constraints = nx_n + nvar + n_rate;
+
+    std::vector<double> xr(nx_n, 0.0);
+    std::vector<double> ur(nu_n, 0.0);
+    std::vector<double> uq(horizon * kNx, 0.0);
+    std::vector<double> xmin_dyn(nx_n, -std::numeric_limits<double>::infinity());
+    std::vector<double> xmax_dyn(nx_n, std::numeric_limits<double>::infinity());
+    std::vector<double> umax_dyn(nu_n, 0.0);
+    std::vector<double> umin_dyn(nu_n, 0.0);
+
+    const double curvature_min = -std::tan(delta_max_) / model_->length();
+    const double curvature_max = std::tan(delta_max_) / model_->length();
+    for (int n = 0; n < horizon; ++n) {
+      umin_dyn.at(kNu * n) = 0.0;
+      umin_dyn.at(kNu * n + 1) = curvature_min;
+      umax_dyn.at(kNu * n) = v_max_;
+      umax_dyn.at(kNu * n + 1) = curvature_max;
+    }
+
+    std::vector<double> kappa_pred(horizon, 0.0);
+    for (int n = 0; n < horizon; ++n) {
+      const int control_index = std::min<int>(3 + kNu * n, static_cast<int>(current_control_.size()) - 1);
+      kappa_pred.at(n) = std::tan(current_control_.at(control_index)) / model_->length();
+    }
+
+    const int delayed_wp_id = model_->wp_id() + wp_id_offset_;
+    model_->set_wp_id(delayed_wp_id);
+
+    std::vector<std::tuple<int, int, double>> a_triplets;
+    a_triplets.reserve(nx_n + horizon * 8 + nvar + n_rate * 2);
+    for (int index = 0; index < nx_n; ++index) {
+      a_triplets.emplace_back(index, index, -1.0);
+    }
+
+    for (int n = 0; n < horizon; ++n) {
+      const auto & current_wp = model_->reference_path().get_waypoint(model_->wp_id() + n);
+      const auto & next_wp = model_->reference_path().get_waypoint(model_->wp_id() + n + 1);
+      const double delta_s = std::hypot(next_wp.x - current_wp.x, next_wp.y - current_wp.y);
+      const double kappa_ref = current_wp.kappa;
+      const double v_ref = std::clamp(current_wp.v_ref, 0.0, v_max_);
+      const auto [f, a_lin, b_lin] = model_->linearize(v_ref, kappa_ref, delta_s);
+
+      const int row = (n + 1) * kNx;
+      const int state_col = n * kNx;
+      const int input_col = nx_n + n * kNu;
+      for (const auto & rc : {std::pair<int, int>{0, 0}, {0, 1}, {1, 0}, {1, 1}, {2, 0}, {2, 2}}) {
+        a_triplets.emplace_back(row + rc.first, state_col + rc.second, a_lin(rc.first, rc.second));
+      }
+      a_triplets.emplace_back(row + 1, input_col + 1, b_lin(1, 1));
+      a_triplets.emplace_back(row + 2, input_col + 0, b_lin(2, 0));
+
+      ur.at(n * kNu) = v_ref;
+      ur.at(n * kNu + 1) = kappa_ref;
+      const Eigen::Vector2d ref_input(v_ref, kappa_ref);
+      const Eigen::Vector3d uq_block = b_lin * ref_input - f;
+      for (int r = 0; r < kNx; ++r) {
+        uq.at(n * kNx + r) = uq_block(r);
+      }
+
+      double max_kappa_pred = std::abs(kappa_pred.at(n));
+      if (use_max_kappa_pred_) {
+        for (int j = n; j < horizon; ++j) {
+          max_kappa_pred = std::max(max_kappa_pred, std::abs(kappa_pred.at(j)));
+        }
+      }
+      const double vmax_dyn = std::sqrt(ay_max_ / (max_kappa_pred + 1.0e-12));
+      umax_dyn.at(kNu * n) = std::min(vmax_dyn, umax_dyn.at(kNu * n));
+    }
+
+    const auto [ub, lb] = model_->reference_path().get_path_constraints(model_->wp_id() + 1, horizon, safety_margin);
+    xmin_dyn.at(0) = model_->spatial_state().e_y;
+    xmax_dyn.at(0) = model_->spatial_state().e_y;
+    for (int n = 0; n < horizon; ++n) {
+      xmin_dyn.at(kNx + n * kNx) = lb.at(n);
+      xmax_dyn.at(kNx + n * kNx) = ub.at(n);
+      xr.at(kNx + n * kNx) = (lb.at(n) + ub.at(n)) / 2.0;
+    }
+
+    const int ineq_row = nx_n;
+    for (int index = 0; index < nvar; ++index) {
+      a_triplets.emplace_back(ineq_row + index, index, 1.0);
+    }
+    const int rate_row = nx_n + nvar;
+    for (int n = 0; n < n_rate; ++n) {
+      a_triplets.emplace_back(rate_row + n, nx_n + kNu * n + 1, -1.0);
+      a_triplets.emplace_back(rate_row + n, nx_n + kNu * (n + 1) + 1, 1.0);
+    }
+
+    std::vector<double> lower(n_constraints, 0.0);
+    std::vector<double> upper(n_constraints, 0.0);
+    lower.at(0) = upper.at(0) = -model_->spatial_state().e_y;
+    lower.at(1) = upper.at(1) = -model_->spatial_state().e_psi;
+    lower.at(2) = upper.at(2) = -model_->spatial_state().t;
+    for (int idx = 0; idx < static_cast<int>(uq.size()); ++idx) {
+      lower.at(kNx + idx) = uq.at(idx);
+      upper.at(kNx + idx) = uq.at(idx);
+    }
+    for (int idx = 0; idx < nx_n; ++idx) {
+      lower.at(nx_n + idx) = xmin_dyn.at(idx);
+      upper.at(nx_n + idx) = xmax_dyn.at(idx);
+    }
+    for (int idx = 0; idx < nu_n; ++idx) {
+      lower.at(nx_n + nx_n + idx) = umin_dyn.at(idx);
+      upper.at(nx_n + nx_n + idx) = umax_dyn.at(idx);
+    }
+    const double max_delta_change = steering_rate_max_ * model_->ts();
+    for (int idx = 0; idx < n_rate; ++idx) {
+      lower.at(nx_n + nvar + idx) = -max_delta_change;
+      upper.at(nx_n + nvar + idx) = max_delta_change;
+    }
+
+    std::vector<std::tuple<int, int, double>> p_triplets;
+    p_triplets.reserve(nvar);
+    std::vector<double> q(nvar, 0.0);
+    for (int n = 0; n < horizon; ++n) {
+      for (int r = 0; r < kNx; ++r) {
+        const int idx = n * kNx + r;
+        if (q_diag_.at(r) != 0.0) {
+          p_triplets.emplace_back(idx, idx, q_diag_.at(r));
+        }
+        q.at(idx) = -q_diag_.at(r) * xr.at(idx);
+      }
+    }
+    for (int r = 0; r < kNx; ++r) {
+      const int idx = horizon * kNx + r;
+      if (qn_diag_.at(r) != 0.0) {
+        p_triplets.emplace_back(idx, idx, qn_diag_.at(r));
+      }
+      q.at(idx) = -qn_diag_.at(r) * xr.at(idx);
+    }
+    for (int n = 0; n < horizon; ++n) {
+      for (int r = 0; r < kNu; ++r) {
+        const int idx = nx_n + n * kNu + r;
+        if (r_diag_.at(r) != 0.0) {
+          p_triplets.emplace_back(idx, idx, r_diag_.at(r));
+        }
+        q.at(idx) = -r_diag_.at(r) * ur.at(n * kNu + r);
+      }
+    }
+
+    return MpcProblem{
+      build_csc_from_triplets(nvar, nvar, std::move(p_triplets)),
+      build_csc_from_triplets(n_constraints, nvar, std::move(a_triplets)), q, lower, upper};
+  }
+
+  void update_prediction(const std::vector<double> & solution, const int horizon)
+  {
+    prediction_x_.clear();
+    prediction_y_.clear();
+    for (int n = 2; n < horizon; ++n) {
+      const auto & associated_wp = model_->reference_path().get_waypoint(model_->wp_id() + n);
+      SpatialState state{
+        solution.at(n * kNx), solution.at(n * kNx + 1), solution.at(n * kNx + 2)};
+      const auto temporal = model_->s2t(associated_wp, state);
+      prediction_x_.push_back(temporal.x);
+      prediction_y_.push_back(temporal.y);
+    }
+  }
+
+  BicycleModel * model_{};
+  int n_{};
+  std::vector<double> q_diag_;
+  std::vector<double> r_diag_;
+  std::vector<double> qn_diag_;
+  double v_max_{};
+  double a_min_{};
+  double a_max_{};
+  double ay_max_{};
+  double delta_max_{};
+  double steering_rate_max_{};
+  int wp_id_offset_{};
+  bool use_max_kappa_pred_{};
+  double previous_steering_{};
+  int infeasibility_counter_{};
+  std::vector<double> current_control_;
+  std::vector<double> prediction_x_;
+  std::vector<double> prediction_y_;
+  OsqpWorkspace workspace_;
+};
+
+std::pair<std::vector<double>, std::vector<double>> load_reference_csv(const std::string & path)
+{
+  std::ifstream file(path);
+  if (!file) {
+    throw std::runtime_error("failed to open reference path: " + path);
+  }
+  std::string header;
+  std::getline(file, header);
+  const auto columns = split_csv_line(header);
+  const auto find_index = [&](const std::string & name) {
+    const auto it = std::find(columns.begin(), columns.end(), name);
+    if (it == columns.end()) {
+      throw std::runtime_error("missing CSV column: " + name);
+    }
+    return static_cast<int>(std::distance(columns.begin(), it));
+  };
+  const int x_idx = find_index("x_m");
+  const int y_idx = find_index("y_m");
+  std::vector<double> x;
+  std::vector<double> y;
+  std::string line;
+  while (std::getline(file, line)) {
+    if (line.empty()) {
+      continue;
+    }
+    const auto values = split_csv_line(line);
+    x.push_back(std::stod(values.at(x_idx)));
+    y.push_back(std::stod(values.at(y_idx)));
+  }
+  return {x, y};
+}
+
+std::vector<RefVelSection> load_ref_vel_sections(const std::string & path)
+{
+  std::vector<RefVelSection> sections;
+  if (path.empty()) {
+    return sections;
+  }
+  const YAML::Node root = YAML::LoadFile(path);
+  if (!root["ref_vel_configulator"]) {
+    return sections;
+  }
+  for (const auto & item : root["ref_vel_configulator"]) {
+    const auto node = item.second;
+    sections.push_back(RefVelSection{node["wp_id"].as<int>(), node["ref_vel"].as<double>()});
+  }
+  std::sort(sections.begin(), sections.end(), [](const auto & lhs, const auto & rhs) {
+    return lhs.wp_id < rhs.wp_id;
+  });
+  return sections;
+}
+
+double get_ref_vel_kmh(const std::vector<RefVelSection> & sections, const int current_wp_id)
+{
+  if (sections.empty()) {
+    return 0.0;
+  }
+  for (size_t i = 0; i < sections.size(); ++i) {
+    const int start = sections.at(i).wp_id;
+    const int end = sections.at((i + 1) % sections.size()).wp_id;
+    if (start <= end) {
+      if (start <= current_wp_id && current_wp_id < end) {
+        return sections.at(i).ref_vel_kmh;
+      }
+    } else if (current_wp_id >= start || current_wp_id < end) {
+      return sections.at(i).ref_vel_kmh;
+    }
+  }
+  return sections.front().ref_vel_kmh;
+}
+
+std::string constraints_cache_path_for_reference_csv(const std::string & reference_csv_path)
+{
+  const auto dot = reference_csv_path.find_last_of('.');
+  if (dot == std::string::npos) {
+    return reference_csv_path + "_constraints.csv";
+  }
+  return reference_csv_path.substr(0, dot) + "_constraints" + reference_csv_path.substr(dot);
+}
+
+template <typename T>
+void write_vector(std::ofstream & out, const std::string & name, const std::vector<T> & values)
+{
+  out << name;
+  for (const auto & value : values) {
+    out << "," << std::setprecision(17) << value;
+  }
+  out << "\n";
+}
+
+int run_qp_dump(const std::string & output_path, const int dump_wp_id)
+{
+  const std::string package_path = ament_index_cpp::get_package_share_directory("multi_purpose_mpc_ros") + "/";
+  const YAML::Node config = YAML::LoadFile(package_path + "config/config.yaml");
+  const auto ref_cfg = config["reference_path"];
+  const std::string reference_csv_path = package_path + ref_cfg["csv_path"].as<std::string>();
+  const auto [wp_x, wp_y] = load_reference_csv(reference_csv_path);
+  auto occupancy_map = std::make_unique<OccupancyMap>(package_path + config["map"]["yaml_path"].as<std::string>());
+  auto reference_path = std::make_unique<ReferencePath>(
+    occupancy_map.get(), wp_x, wp_y, ref_cfg["resolution"].as<double>(), ref_cfg["smoothing_distance"].as<int>(),
+    ref_cfg["max_width"].as<double>(), ref_cfg["circular"].as<bool>());
+  reference_path->load_width_constraints_csv(constraints_cache_path_for_reference_csv(reference_csv_path));
+
+  const auto mpc_cfg = config["mpc"];
+  reference_path->compute_speed_profile(
+    mpc_cfg["a_min"].as<double>(), mpc_cfg["a_max"].as<double>(), 0.0,
+    kmh_to_mps(mpc_cfg["v_max"].as<double>()), mpc_cfg["ay_max"].as<double>());
+  reference_path->update_simple_path_constraints(
+    mpc_cfg["N"].as<int>(), config["bicycle_model"]["width"].as<double>() / std::sqrt(2.0));
+
+  BicycleModel model(
+    reference_path.get(), config["bicycle_model"]["length"].as<double>(), config["bicycle_model"]["width"].as<double>(),
+    1.0 / mpc_cfg["control_rate"].as<double>());
+  const auto & initial_wp = reference_path->get_waypoint(dump_wp_id);
+  model.update_states(initial_wp.x, initial_wp.y, initial_wp.psi);
+  MpcSolver solver(&model, config);
+  const auto problem = solver.debug_problem();
+  const auto solution = solver.debug_solve(problem);
+  const int horizon = mpc_cfg["N"].as<int>();
+  std::vector<double> raw_control(solution.end() - horizon * kNu, solution.end());
+  std::vector<double> steer_control = raw_control;
+  for (int i = 1; i < static_cast<int>(steer_control.size()); i += 2) {
+    steer_control.at(i) = std::atan(steer_control.at(i) * model.length());
+  }
+
+  std::ofstream out(output_path);
+  if (!out) {
+    std::cerr << "failed to open dump path: " << output_path << std::endl;
+    return 1;
+  }
+  out << "meta,nx," << kNx << ",nu," << kNu << ",wp_id," << dump_wp_id << "\n";
+  out << "P_shape," << problem.p.rows << "," << problem.p.cols << "," << problem.p.x.size() << "\n";
+  write_vector(out, "P_x", problem.p.x);
+  write_vector(out, "P_i", problem.p.i);
+  write_vector(out, "P_p", problem.p.p);
+  out << "A_shape," << problem.a.rows << "," << problem.a.cols << "," << problem.a.x.size() << "\n";
+  write_vector(out, "A_x", problem.a.x);
+  write_vector(out, "A_i", problem.a.i);
+  write_vector(out, "A_p", problem.a.p);
+  write_vector(out, "q", problem.q);
+  write_vector(out, "l", problem.l);
+  write_vector(out, "u", problem.u);
+  write_vector(out, "solution", solution);
+  write_vector(out, "raw_control", raw_control);
+  write_vector(out, "steer_control", steer_control);
+  return 0;
+}
+
+int run_sequence_dump(const std::string & output_path, const int start_wp_id, const int steps)
+{
+  const std::string package_path = ament_index_cpp::get_package_share_directory("multi_purpose_mpc_ros") + "/";
+  const YAML::Node config = YAML::LoadFile(package_path + "config/config.yaml");
+  const auto ref_cfg = config["reference_path"];
+  const std::string reference_csv_path = package_path + ref_cfg["csv_path"].as<std::string>();
+  const auto [wp_x, wp_y] = load_reference_csv(reference_csv_path);
+  auto occupancy_map = std::make_unique<OccupancyMap>(package_path + config["map"]["yaml_path"].as<std::string>());
+  auto reference_path = std::make_unique<ReferencePath>(
+    occupancy_map.get(), wp_x, wp_y, ref_cfg["resolution"].as<double>(), ref_cfg["smoothing_distance"].as<int>(),
+    ref_cfg["max_width"].as<double>(), ref_cfg["circular"].as<bool>());
+  reference_path->load_width_constraints_csv(constraints_cache_path_for_reference_csv(reference_csv_path));
+
+  const auto mpc_cfg = config["mpc"];
+  reference_path->compute_speed_profile(
+    mpc_cfg["a_min"].as<double>(), mpc_cfg["a_max"].as<double>(), 0.0,
+    kmh_to_mps(mpc_cfg["v_max"].as<double>()), mpc_cfg["ay_max"].as<double>());
+  reference_path->update_simple_path_constraints(
+    mpc_cfg["N"].as<int>(), config["bicycle_model"]["width"].as<double>() / std::sqrt(2.0));
+
+  BicycleModel model(
+    reference_path.get(), config["bicycle_model"]["length"].as<double>(), config["bicycle_model"]["width"].as<double>(),
+    1.0 / mpc_cfg["control_rate"].as<double>());
+  const auto & initial_wp = reference_path->get_waypoint(start_wp_id);
+  model.update_states(initial_wp.x, initial_wp.y, initial_wp.psi);
+  MpcSolver solver(&model, config);
+
+  std::ofstream out(output_path);
+  if (!out) {
+    std::cerr << "failed to open sequence dump path: " << output_path << std::endl;
+    return 1;
+  }
+  out << "step,wp_id,x,y,psi,v_cmd,delta_cmd,max_delta\n";
+  for (int step = 0; step < steps; ++step) {
+    const auto [control, max_delta] = solver.get_control();
+    const auto state = model.temporal_state();
+    out << step << "," << model.wp_id() << "," << std::setprecision(17) << state.x << "," << state.y << ","
+        << state.psi << "," << control[0] << "," << control[1] << "," << max_delta << "\n";
+    model.drive(control[0], control[1]);
+  }
+  return 0;
+}
+
+int run_sequence_benchmark(const int start_wp_id, const int steps)
+{
+  using Clock = std::chrono::steady_clock;
+  const auto total_start = Clock::now();
+  const std::string package_path = ament_index_cpp::get_package_share_directory("multi_purpose_mpc_ros") + "/";
+  const YAML::Node config = YAML::LoadFile(package_path + "config/config.yaml");
+  const auto ref_cfg = config["reference_path"];
+  const std::string reference_csv_path = package_path + ref_cfg["csv_path"].as<std::string>();
+  const auto [wp_x, wp_y] = load_reference_csv(reference_csv_path);
+  auto occupancy_map = std::make_unique<OccupancyMap>(package_path + config["map"]["yaml_path"].as<std::string>());
+  auto reference_path = std::make_unique<ReferencePath>(
+    occupancy_map.get(), wp_x, wp_y, ref_cfg["resolution"].as<double>(), ref_cfg["smoothing_distance"].as<int>(),
+    ref_cfg["max_width"].as<double>(), ref_cfg["circular"].as<bool>());
+  reference_path->load_width_constraints_csv(constraints_cache_path_for_reference_csv(reference_csv_path));
+
+  const auto mpc_cfg = config["mpc"];
+  reference_path->compute_speed_profile(
+    mpc_cfg["a_min"].as<double>(), mpc_cfg["a_max"].as<double>(), 0.0,
+    kmh_to_mps(mpc_cfg["v_max"].as<double>()), mpc_cfg["ay_max"].as<double>());
+  reference_path->update_simple_path_constraints(
+    mpc_cfg["N"].as<int>(), config["bicycle_model"]["width"].as<double>() / std::sqrt(2.0));
+
+  BicycleModel model(
+    reference_path.get(), config["bicycle_model"]["length"].as<double>(), config["bicycle_model"]["width"].as<double>(),
+    1.0 / mpc_cfg["control_rate"].as<double>());
+  const auto & initial_wp = reference_path->get_waypoint(start_wp_id);
+  model.update_states(initial_wp.x, initial_wp.y, initial_wp.psi);
+  MpcSolver solver(&model, config);
+  const auto setup_end = Clock::now();
+
+  std::vector<double> samples_ms;
+  samples_ms.reserve(steps);
+  const auto loop_start = Clock::now();
+  for (int step = 0; step < steps; ++step) {
+    const auto step_start = Clock::now();
+    const auto [control, max_delta] = solver.get_control();
+    (void)max_delta;
+    samples_ms.push_back(std::chrono::duration<double, std::milli>(Clock::now() - step_start).count());
+    model.drive(control[0], control[1]);
+  }
+  const auto loop_end = Clock::now();
+
+  auto sorted_samples = samples_ms;
+  std::sort(sorted_samples.begin(), sorted_samples.end());
+  const double sum = std::accumulate(samples_ms.begin(), samples_ms.end(), 0.0);
+  const double mean = sum / static_cast<double>(samples_ms.size());
+  const size_t p95_index = std::min(
+    sorted_samples.size() - 1, static_cast<size_t>(std::ceil(static_cast<double>(sorted_samples.size()) * 0.95)) - 1);
+  const double setup_ms = std::chrono::duration<double, std::milli>(setup_end - total_start).count();
+  const double loop_ms = std::chrono::duration<double, std::milli>(loop_end - loop_start).count();
+  std::cout << "cpp_mpc_load_test"
+            << " steps=" << steps << " wp_id=" << start_wp_id << " setup_ms=" << std::setprecision(3) << std::fixed
+            << setup_ms << " loop_total_ms=" << loop_ms << " mean_ms=" << mean
+            << " p95_ms=" << sorted_samples.at(p95_index) << " max_ms=" << sorted_samples.back()
+            << " rate_hz=" << static_cast<double>(steps) / (loop_ms / 1000.0) << std::endl;
+  return 0;
+}
+
+class MpcControllerCpp : public rclcpp::Node
+{
+public:
+  MpcControllerCpp()
+  : Node("mpc_controller_cpp")
+  {
+    declare_parameter("config_path", std::string("config/config.yaml"));
+    declare_parameter("ref_vel_config_path", std::string("config/ref_vel.yaml"));
+    declare_parameter("use_boost_acceleration", false);
+    declare_parameter("use_obstacle_avoidance", false);
+    declare_parameter("use_stats", false);
+
+    package_path_ = ament_index_cpp::get_package_share_directory("multi_purpose_mpc_ros") + "/";
+    config_path_ = resolve_pkg_path(get_parameter("config_path").as_string());
+    ref_vel_config_path_ = resolve_pkg_path(get_parameter("ref_vel_config_path").as_string());
+    use_boost_acceleration_ = get_parameter("use_boost_acceleration").as_bool();
+    config_ = YAML::LoadFile(config_path_);
+    ref_vel_sections_ = load_ref_vel_sections(ref_vel_config_path_);
+
+    const auto ref_cfg = config_["reference_path"];
+    const std::string reference_csv_path = resolve_pkg_path(ref_cfg["csv_path"].as<std::string>());
+    const auto [wp_x, wp_y] = load_reference_csv(reference_csv_path);
+    occupancy_map_ = std::make_unique<OccupancyMap>(resolve_pkg_path(config_["map"]["yaml_path"].as<std::string>()));
+    reference_path_ = std::make_unique<ReferencePath>(
+      occupancy_map_.get(), wp_x, wp_y, ref_cfg["resolution"].as<double>(),
+      ref_cfg["smoothing_distance"].as<int>(), ref_cfg["max_width"].as<double>(), ref_cfg["circular"].as<bool>());
+    reference_path_->load_width_constraints_csv(constraints_cache_path_for_reference_csv(reference_csv_path));
+
+    const auto mpc_cfg = config_["mpc"];
+    const double initial_v_max_kmh = use_boost_acceleration_ ? 40.0 : mpc_cfg["v_max"].as<double>();
+    reference_path_->compute_speed_profile(
+      mpc_cfg["a_min"].as<double>(), mpc_cfg["a_max"].as<double>(), 0.0,
+      kmh_to_mps(initial_v_max_kmh), mpc_cfg["ay_max"].as<double>());
+    reference_path_->update_simple_path_constraints(
+      mpc_cfg["N"].as<int>(), config_["bicycle_model"]["width"].as<double>() / std::sqrt(2.0));
+
+    model_ = std::make_unique<BicycleModel>(
+      reference_path_.get(), config_["bicycle_model"]["length"].as<double>(),
+      config_["bicycle_model"]["width"].as<double>(), 1.0 / mpc_cfg["control_rate"].as<double>());
+    mpc_ = std::make_unique<MpcSolver>(model_.get(), config_);
+    if (use_boost_acceleration_) {
+      mpc_->update_v_max(kmh_to_mps(40.0));
+    }
+
+    if (use_boost_acceleration_) {
+      boost_command_pub_ = create_publisher<AckermannControlBoostCommand>("/boost_commander/command", 1);
+    } else {
+      command_pub_ = create_publisher<AckermannControlCommand>("/control/command/control_cmd", 1);
+      command_raw_pub_ = create_publisher<AckermannControlCommand>("/control/command/control_cmd_raw", 1);
+    }
+    prediction_pub_ = create_publisher<MarkerArray>("/mpc/prediction", 1);
+    prediction_dummy_pub_ = create_publisher<MarkerArray>(
+      "/planning/scenario_planning/lane_driving/motion_planning/obstacle_stop_planner/virtual_wall", 1);
+    ref_path_pub_ = create_publisher<MarkerArray>("/mpc/ref_path", rclcpp::QoS(1).transient_local());
+    ref_path_dummy_pub_ = create_publisher<MarkerArray>(
+      "/planning/scenario_planning/lane_driving/behavior_planning/behavior_path_planner/debug/bound",
+      rclcpp::QoS(1).transient_local());
+
+    odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+      "/localization/kinematic_state", 1, [this](const nav_msgs::msg::Odometry::SharedPtr msg) { odom_ = msg; });
+    control_mode_sub_ = create_subscription<std_msgs::msg::Bool>(
+      "control/control_mode_request_topic", 1, [this](const std_msgs::msg::Bool::SharedPtr msg) {
+        if (msg->data && !enable_control_) {
+          RCLCPP_INFO(get_logger(), "Control mode request received");
+          enable_control_ = true;
+        }
+      });
+    stop_request_sub_ = create_subscription<std_msgs::msg::Empty>(
+      "/control/mpc/stop_request", 1, [this](const std_msgs::msg::Empty::SharedPtr) {
+        if (enable_control_) {
+          RCLCPP_WARN(get_logger(), "Stop request received");
+          enable_control_ = false;
+        }
+      });
+    if (get_parameter("use_sim_time").as_bool()) {
+      awsim_status_sub_ = create_subscription<std_msgs::msg::Float32MultiArray>(
+        "/awsim/status", 1, [this](const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
+          if (msg->data.size() > 2) {
+            current_laps_ = static_cast<int>(msg->data.at(1));
+            last_lap_time_ = msg->data.at(2);
+          }
+        });
+      condition_sub_ = create_subscription<std_msgs::msg::Int32>(
+        "/aichallenge/pitstop/condition", 1, [this](const std_msgs::msg::Int32::SharedPtr msg) {
+          last_condition_ = msg->data;
+        });
+    }
+
+    publish_ref_path_marker();
+    setup_parameter_callback();
+    const double rate = mpc_cfg["control_rate"].as<double>();
+    timer_ = create_wall_timer(std::chrono::duration<double>(1.0 / rate), [this]() { control(); });
+    last_time_ = now();
+    RCLCPP_INFO(get_logger(), "C++ MPC controller started");
+  }
+
+private:
+  std::string resolve_pkg_path(const std::string & path) const
+  {
+    if (path.empty() || path.front() == '/') {
+      return path;
+    }
+    return package_path_ + path;
+  }
+
+  void setup_parameter_callback()
+  {
+    auto mpc_cfg = config_["mpc"];
+    declare_parameter("v_max", mpc_cfg["v_max"].as<double>());
+    declare_parameter("steering_tire_angle_gain_var", mpc_cfg["steering_tire_angle_gain_var"].as<double>());
+    declare_parameter("Q0", mpc_cfg["Q"][0].as<double>());
+    declare_parameter("Q1", mpc_cfg["Q"][1].as<double>());
+    declare_parameter("Q2", mpc_cfg["Q"][2].as<double>());
+    declare_parameter("R0", mpc_cfg["R"][0].as<double>());
+    declare_parameter("R1", mpc_cfg["R"][1].as<double>());
+    declare_parameter("QN0", mpc_cfg["QN"][0].as<double>());
+    declare_parameter("QN1", mpc_cfg["QN"][1].as<double>());
+    declare_parameter("QN2", mpc_cfg["QN"][2].as<double>());
+    declare_parameter("ay_max", mpc_cfg["ay_max"].as<double>());
+    declare_parameter("accel_low_pass_gain", mpc_cfg["accel_low_pass_gain"].as<double>());
+    declare_parameter("steer_low_pass_gain", mpc_cfg["steer_low_pass_gain"].as<double>());
+    declare_parameter("wp_id_offset", mpc_cfg["wp_id_offset"].as<int>());
+
+    parameter_callback_handle_ = add_on_set_parameters_callback(
+      [this](const std::vector<rclcpp::Parameter> & parameters) {
+        rcl_interfaces::msg::SetParametersResult result;
+        result.successful = true;
+        for (const auto & parameter : parameters) {
+          const auto & name = parameter.get_name();
+          if (name == "v_max" && parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+            const double v_max_kmh = parameter.as_double();
+            config_["mpc"]["v_max"] = v_max_kmh;
+            const double v_max = kmh_to_mps(v_max_kmh);
+            mpc_->update_v_max(v_max);
+            reference_path_->set_v_ref(std::vector<double>(reference_path_->size(), v_max));
+          } else if (
+            name == "steering_tire_angle_gain_var" &&
+            parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE)
+          {
+            config_["mpc"]["steering_tire_angle_gain_var"] = parameter.as_double();
+          } else if (name == "ay_max" && parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+            config_["mpc"]["ay_max"] = parameter.as_double();
+            mpc_->update_ay_max(parameter.as_double());
+          } else if (
+            name == "accel_low_pass_gain" && parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE)
+          {
+            config_["mpc"]["accel_low_pass_gain"] = parameter.as_double();
+          } else if (
+            name == "steer_low_pass_gain" && parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE)
+          {
+            config_["mpc"]["steer_low_pass_gain"] = parameter.as_double();
+          } else if (name == "wp_id_offset" && parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
+            config_["mpc"]["wp_id_offset"] = parameter.as_int();
+            mpc_->update_wp_id_offset(static_cast<int>(parameter.as_int()));
+          } else if (name.size() == 2 && name[0] == 'Q' && std::isdigit(name[1])) {
+            const int index = name[1] - '0';
+            config_["mpc"]["Q"][index] = parameter.as_double();
+            mpc_->update_q(index, parameter.as_double());
+          } else if (name.size() == 2 && name[0] == 'R' && std::isdigit(name[1])) {
+            const int index = name[1] - '0';
+            config_["mpc"]["R"][index] = parameter.as_double();
+            mpc_->update_r(index, parameter.as_double());
+          } else if (name.size() == 3 && name.substr(0, 2) == "QN" && std::isdigit(name[2])) {
+            const int index = name[2] - '0';
+            config_["mpc"]["QN"][index] = parameter.as_double();
+            mpc_->update_qn(index, parameter.as_double());
+          }
+        }
+        return result;
+      });
+  }
+
+  void control()
+  {
+    if (!odom_) {
+      return;
+    }
+    const auto current_time = now();
+    const double dt = std::max(1.0e-3, (current_time - last_time_).seconds());
+    last_time_ = current_time;
+
+    const auto & pose = odom_->pose.pose;
+    const double yaw = yaw_from_quaternion(pose.orientation);
+    const double actual_v = odom_->twist.twist.linear.x;
+    model_->update_states(pose.position.x, pose.position.y, yaw);
+
+    auto [u, max_delta] = mpc_->get_control();
+
+    if (!ref_vel_sections_.empty()) {
+      const double ref_vel_mps = std::min(
+        kmh_to_mps(get_ref_vel_kmh(ref_vel_sections_, model_->wp_id())),
+        kmh_to_mps(config_["mpc"]["v_max"].as<double>()));
+      mpc_->update_v_max(ref_vel_mps);
+      reference_path_->set_v_ref(std::vector<double>(reference_path_->size(), ref_vel_mps));
+    }
+
+    if (!enable_control_) {
+      const double last_v_cmd = last_u_[0];
+      if (last_v_cmd < 0.5) {
+        u[0] = 0.0;
+      } else {
+        u[0] = std::clamp(
+          last_v_cmd + config_["mpc"]["a_min"].as<double>() * dt, 0.0,
+          kmh_to_mps(config_["mpc"]["v_max"].as<double>()));
+      }
+    }
+
+    double acc = 0.0;
+    bool boost_enabled = false;
+    if (use_boost_acceleration_) {
+      const auto deg2rad = [](const double deg) { return deg * kPi / 180.0; };
+      if (
+        std::abs(actual_v) > kmh_to_mps(44.0) ||
+        (std::abs(actual_v) > kmh_to_mps(38.0) && std::abs(max_delta) > deg2rad(12.0)))
+      {
+        boost_enabled = false;
+        acc = config_["mpc"]["a_min"].as<double>() / 3.0 * 2.0;
+      } else if (std::abs(actual_v) > kmh_to_mps(41.0) || std::abs(u[1]) > deg2rad(10.0)) {
+        boost_enabled = false;
+        acc = config_["mpc"]["a_max"].as<double>();
+      } else {
+        boost_enabled = true;
+        acc = 500.0;
+      }
+    } else {
+      acc = std::clamp(
+        kp_ * (u[0] - actual_v), config_["mpc"]["a_min"].as<double>(), config_["mpc"]["a_max"].as<double>());
+    }
+    acc = last_acc_ + (acc - last_acc_) * config_["mpc"]["accel_low_pass_gain"].as<double>();
+    u[1] = last_u_[1] + (u[1] - last_u_[1]) * config_["mpc"]["steer_low_pass_gain"].as<double>();
+
+    last_acc_ = acc;
+    last_u_ = u;
+    model_->drive(actual_v, u[1]);
+    publish_command(current_time, u, acc, boost_enabled);
+
+    ++loop_;
+    const int pred_period = std::max(1, static_cast<int>(config_["mpc"]["control_rate"].as<double>() / 4.0));
+    if (loop_ % pred_period == 0) {
+      publish_prediction_marker();
+    }
+  }
+
+  void publish_command(
+    const rclcpp::Time & stamp, const std::array<double, 2> & u, const double acc, const bool boost_enabled)
+  {
+    AckermannControlCommand raw;
+    raw.stamp = stamp;
+    raw.lateral.stamp = stamp;
+    raw.lateral.steering_tire_angle = u[1];
+    raw.lateral.steering_tire_rotation_rate = 2.0;
+    raw.longitudinal.stamp = stamp;
+    raw.longitudinal.speed = u[0];
+    raw.longitudinal.acceleration = acc;
+    if (use_boost_acceleration_) {
+      AckermannControlBoostCommand boost;
+      boost.command = raw;
+      boost.boost_mode = boost_enabled;
+      boost_command_pub_->publish(boost);
+      return;
+    }
+
+    command_raw_pub_->publish(raw);
+
+    auto cmd = raw;
+    cmd.lateral.steering_tire_angle *= config_["mpc"]["steering_tire_angle_gain_var"].as<double>();
+    command_pub_->publish(cmd);
+  }
+
+  void publish_prediction_marker()
+  {
+    MarkerArray array;
+    for (size_t i = 0; i < mpc_->prediction_x().size(); ++i) {
+      Marker marker;
+      marker.header.frame_id = "map";
+      marker.header.stamp = now();
+      marker.ns = "mpc_pred";
+      marker.id = static_cast<int>(i);
+      marker.type = Marker::SPHERE;
+      marker.action = Marker::ADD;
+      marker.pose.position.x = mpc_->prediction_x().at(i);
+      marker.pose.position.y = mpc_->prediction_y().at(i);
+      marker.pose.position.z = 0.0;
+      marker.scale.x = 0.5;
+      marker.scale.y = 0.5;
+      marker.scale.z = 0.5;
+      marker.color.r = 0.0;
+      marker.color.g = 156.0 / 255.0;
+      marker.color.b = 209.0 / 255.0;
+      marker.color.a = 1.0;
+      array.markers.push_back(marker);
+    }
+    prediction_pub_->publish(array);
+    prediction_dummy_pub_->publish(array);
+  }
+
+  void publish_ref_path_marker()
+  {
+    MarkerArray array;
+    for (int i = 0; i + 1 < reference_path_->size(); ++i) {
+      const auto & start_wp = reference_path_->get_waypoint(i);
+      const auto & end_wp = reference_path_->get_waypoint(i + 1);
+      Marker marker;
+      marker.header.frame_id = "map";
+      marker.header.stamp = now();
+      marker.ns = "ref_path";
+      marker.id = i;
+      marker.type = Marker::LINE_STRIP;
+      marker.action = Marker::ADD;
+      marker.scale.x = 0.2;
+      marker.color.b = 1.0;
+      marker.color.a = 0.7;
+      geometry_msgs::msg::Point start;
+      start.x = start_wp.x;
+      start.y = start_wp.y;
+      geometry_msgs::msg::Point end;
+      end.x = end_wp.x;
+      end.y = end_wp.y;
+      marker.points.push_back(start);
+      marker.points.push_back(end);
+      array.markers.push_back(marker);
+    }
+    ref_path_pub_->publish(array);
+    ref_path_dummy_pub_->publish(array);
+  }
+
+  std::string package_path_;
+  std::string config_path_;
+  std::string ref_vel_config_path_;
+  YAML::Node config_;
+  std::unique_ptr<OccupancyMap> occupancy_map_;
+  std::unique_ptr<ReferencePath> reference_path_;
+  std::unique_ptr<BicycleModel> model_;
+  std::unique_ptr<MpcSolver> mpc_;
+  std::vector<RefVelSection> ref_vel_sections_;
+  nav_msgs::msg::Odometry::SharedPtr odom_;
+  bool use_boost_acceleration_{};
+  bool enable_control_{true};
+  double last_acc_{};
+  std::array<double, 2> last_u_{0.0, 0.0};
+  rclcpp::Time last_time_;
+  int loop_{};
+  int current_laps_{};
+  double last_lap_time_{};
+  int last_condition_{};
+  const double kp_{100.0};
+
+  rclcpp::Publisher<AckermannControlCommand>::SharedPtr command_pub_;
+  rclcpp::Publisher<AckermannControlCommand>::SharedPtr command_raw_pub_;
+  rclcpp::Publisher<AckermannControlBoostCommand>::SharedPtr boost_command_pub_;
+  rclcpp::Publisher<MarkerArray>::SharedPtr prediction_pub_;
+  rclcpp::Publisher<MarkerArray>::SharedPtr prediction_dummy_pub_;
+  rclcpp::Publisher<MarkerArray>::SharedPtr ref_path_pub_;
+  rclcpp::Publisher<MarkerArray>::SharedPtr ref_path_dummy_pub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr control_mode_sub_;
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr stop_request_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr awsim_status_sub_;
+  rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr condition_sub_;
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
+  rclcpp::TimerBase::SharedPtr timer_;
+};
+
+}  // namespace
+
+int main(int argc, char ** argv)
+{
+  int dump_wp_id = 0;
+  int sequence_steps = 20;
+  for (int i = 1; i + 1 < argc; ++i) {
+    if (std::string(argv[i]) == "--dump_wp_id") {
+      dump_wp_id = std::stoi(argv[i + 1]);
+    }
+    if (std::string(argv[i]) == "--sequence_steps") {
+      sequence_steps = std::stoi(argv[i + 1]);
+    }
+  }
+  for (int i = 1; i + 1 < argc; ++i) {
+    if (std::string(argv[i]) == "--dump_qp") {
+      return run_qp_dump(argv[i + 1], dump_wp_id);
+    }
+    if (std::string(argv[i]) == "--dump_sequence") {
+      return run_sequence_dump(argv[i + 1], dump_wp_id, sequence_steps);
+    }
+    if (std::string(argv[i]) == "--benchmark_sequence") {
+      return run_sequence_benchmark(dump_wp_id, sequence_steps);
+    }
+  }
+  rclcpp::init(argc, argv);
+  rclcpp::spin(std::make_shared<MpcControllerCpp>());
+  rclcpp::shutdown();
+  return 0;
+}

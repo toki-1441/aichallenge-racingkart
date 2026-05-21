@@ -2,14 +2,28 @@
 <launch>
   <arg name="use_sim_time" default="true"/>
   <arg name="use_obstacle_avoidance" default="false"/>
+  <arg name="use_cpp_mpc" default="true"/>
+
 
   <node pkg="multi_purpose_mpc_ros" exec="run_mpc_controller.bash"
         name="mpc_controller" output="screen"
         args="--config_path $(find-pkg-share multi_purpose_mpc_ros)/config/config.yaml
-              --ref_vel_path $(find-pkg-share multi_purpose_mpc_ros)/config/ref_vel.yaml">
+              --ref_vel_path $(find-pkg-share multi_purpose_mpc_ros)/config/ref_vel.yaml"
+        unless="$(var use_cpp_mpc)">
     <param name="use_sim_time" value="$(var use_sim_time)"/>
     <param name="use_boost_acceleration" value="false"/>
     <param name="use_obstacle_avoidance" value="$(var use_obstacle_avoidance)"/>
     <param name="use_stats" value="false"/>
+  </node>
+
+  <node pkg="multi_purpose_mpc_ros" exec="mpc_controller_cpp"
+        name="mpc_controller" output="screen"
+        if="$(var use_cpp_mpc)">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <param name="use_boost_acceleration" value="false"/>
+    <param name="use_obstacle_avoidance" value="$(var use_obstacle_avoidance)"/>
+    <param name="use_stats" value="false"/>
+    <param name="config_path" value="$(find-pkg-share multi_purpose_mpc_ros)/config/config.yaml"/>
+    <param name="ref_vel_config_path" value="$(find-pkg-share multi_purpose_mpc_ros)/config/ref_vel.yaml"/>
   </node>
 </launch>

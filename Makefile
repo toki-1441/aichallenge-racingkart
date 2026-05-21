@@ -1,8 +1,8 @@
 # make file inspired by https://roborovsky-racers.github.io/RoborovskyNote/
 SHELL := /bin/bash
 
-.PHONY: autoware-build autoware-vehicle autoware-simulator autoware-request-initialpose autoware-request-control  awsim-request-start awsim-request-reset autoware-driver-zenoh \
-	simulator dev dev2 dev3 dev4 driver zenoh download rviz2 down down2 down3 down4 ps autoware-bash
+.PHONY: autoware-build autoware-vehicle autoware-simulator autoware-simulation autoware-request-initialpose autoware-request-control  autoware-request-start autoware-driver-zenoh \
+	simulator simulator-reset dev dev2 dev3 dev4 driver zenoh download rviz2 down down2 down3 down4 ps autoware-bash
 
 # Used by docker-compose.yml for build/eval artifact ownership.
 HOST_UID ?= $(shell id -u)
@@ -14,6 +14,10 @@ unexport ROS_DOMAIN_ID
 ifeq ($(origin ROS_DOMAIN_ID),command line)
 export ROS_DOMAIN_ID
 endif
+
+
+ROS_DOMAIN_ID := 1
+USE_CPP_MPC ?= true
 
 TIMESTAMP := $(shell date +%Y%m%d-%H%M%S)
 LOG_DIR := /output/$(TIMESTAMP)
@@ -30,7 +34,13 @@ autoware-vehicle:
 # run autoware for simulator
 autoware-simulator:
 	@echo "Start Autoware for AWSIM"
-	LOG_DIR=$(LOG_DIR) RUN_MODE=awsim docker compose up -d autoware
+	LOG_DIR=$(LOG_DIR) RUN_MODE=awsim ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) USE_CPP_MPC=$(USE_CPP_MPC) docker compose up -d autoware
+
+autoware-simulation: autoware-simulator
+
+autoware-simulation-cpp: USE_CPP_MPC := true
+autoware-simulation-cpp: autoware-simulator
+
 
 # autoware command service use ROS_DOMAIN_ID from .env
 autoware-request-initialpose:
