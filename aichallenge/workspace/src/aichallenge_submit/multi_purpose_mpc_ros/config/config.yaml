@@ -48,6 +48,23 @@ avoidance:
       end_s_m: 106.8978834
       line: left_wall
 
+avoidance_planner:
+  enabled: true
+  candidate_wall_margin_m: 0.1
+  prediction_horizon_s: 3.0
+  prediction_dt_s: 0.2
+  ego_radius_m: 0.75
+  obstacle_radius_m: 0.85
+  collision_margin_m: 0.5
+  min_hold_time_s: 1.5
+  switch_cooldown_s: 1.0
+  switch_margin_m: 0.5
+  obstacle_timeout_s: 1.0
+  obstacle_v_max_mps: 30.0
+  obstacle_jump_threshold_m: 8.0
+  emergency_override: true
+  default_line: center
+
 reference_path:
   update_by_topic: false # When true, 'circle' must be false
   # path from pkg share dir
@@ -122,7 +139,7 @@ mpc:
   ## --------- 中速 -------------- ##
   ## Lap1: 67s, Lap2: 64s
 
-  v_max: 24.0
+  v_max: 28.0
   ay_max: 6.5
   Q: [3000000.0, 90000000.0, 100000.0] # 低速だとインを攻めがちなので、あえて外に膨らむパラメータ
   QN: [1000000.0, 1000.0, 10000.0]
