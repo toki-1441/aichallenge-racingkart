@@ -122,6 +122,36 @@ struct RefVelSection
   double ref_vel_kmh{};
 };
 
+enum class AvoidanceLine
+{
+  Center,
+  LeftWall,
+  RightWall,
+};
+
+struct AvoidanceSectionPolicy
+{
+  int section_id{};
+  double start_s_m{};
+  double end_s_m{};
+  AvoidanceLine line{AvoidanceLine::Center};
+  double wall_margin_m{};
+  double blend_length_m{};
+  bool has_virtual_block_s{};
+  double virtual_block_s_m{};
+};
+
+struct AvoidanceConfig
+{
+  bool enabled{};
+  double wall_margin_m{1.0};
+  double blend_length_m{4.0};
+  double slow_distance_m{3.0};
+  double stop_distance_m{1.0};
+  double slow_speed_mps{kmh_to_mps(10.0)};
+  std::vector<AvoidanceSectionPolicy> sections;
+};
+
 class OccupancyMap
 {
 public:
@@ -327,6 +357,34 @@ public:
   const std::vector<Waypoint> & waypoints() const { return waypoints_; }
 
   const std::vector<double> & cumulative_lengths() const { return cumulative_lengths_; }
+
+  double total_length() const
+  {
+    if (cumulative_lengths_.empty()) {
+      return 0.0;
+    }
+    return cumulative_lengths_.back();
+  }
+
+  double s_at_index(const int index) const
+  {
+    if (cumulative_lengths_.empty()) {
+      return 0.0;
+    }
+    if (!circular_) {
+      const int clipped = std::clamp(index, 0, static_cast<int>(cumulative_lengths_.size()) - 1);
+      return cumulative_lengths_.at(clipped);
+    }
+
+    const int size = static_cast<int>(cumulative_lengths_.size());
+    int wrapped = index % size;
+    int laps = index / size;
+    if (wrapped < 0) {
+      wrapped += size;
+      --laps;
+    }
+    return static_cast<double>(laps) * total_length() + cumulative_lengths_.at(wrapped);
+  }
 
   std::pair<std::vector<double>, std::vector<double>> get_path_constraints(
     const int ref_wp_id, const int horizon, const double safety_margin) const
@@ -656,6 +714,7 @@ public:
   double width() const { return width_; }
   double safety_margin() const { return safety_margin_; }
   double ts() const { return ts_; }
+  double s() const { return s_; }
   int wp_id() const { return wp_id_; }
   void set_wp_id(const int wp_id) { wp_id_ = wp_id; }
   const SpatialState & spatial_state() const { return spatial_state_; }
@@ -961,6 +1020,59 @@ struct MpcProblem
   std::vector<double> u;
 };
 
+AvoidanceLine parse_avoidance_line(const std::string & line)
+{
+  if (line == "center") {
+    return AvoidanceLine::Center;
+  }
+  if (line == "left_wall") {
+    return AvoidanceLine::LeftWall;
+  }
+  if (line == "right_wall") {
+    return AvoidanceLine::RightWall;
+  }
+  throw std::runtime_error("unknown avoidance line: " + line);
+}
+
+AvoidanceConfig load_avoidance_config(const YAML::Node & config)
+{
+  AvoidanceConfig avoidance;
+  const YAML::Node node = config["avoidance"];
+  if (!node) {
+    return avoidance;
+  }
+
+  avoidance.enabled = node["enabled"].as<bool>(false);
+  avoidance.wall_margin_m = node["wall_margin_m"].as<double>(avoidance.wall_margin_m);
+  avoidance.blend_length_m = node["blend_length_m"].as<double>(avoidance.blend_length_m);
+  avoidance.slow_distance_m = node["slow_distance_m"].as<double>(avoidance.slow_distance_m);
+  avoidance.stop_distance_m = node["stop_distance_m"].as<double>(avoidance.stop_distance_m);
+  avoidance.slow_speed_mps = kmh_to_mps(node["slow_speed_kmh"].as<double>(10.0));
+
+  const YAML::Node sections = node["sections"];
+  if (!sections) {
+    return avoidance;
+  }
+  for (const auto & item : sections) {
+    AvoidanceSectionPolicy policy;
+    policy.section_id = item["section_id"].as<int>();
+    policy.start_s_m = item["start_s_m"].as<double>();
+    policy.end_s_m = item["end_s_m"].as<double>();
+    policy.line = parse_avoidance_line(item["line"].as<std::string>("center"));
+    policy.wall_margin_m = item["wall_margin_m"].as<double>(avoidance.wall_margin_m);
+    policy.blend_length_m = item["blend_length_m"].as<double>(avoidance.blend_length_m);
+    if (item["virtual_block_s_m"] && item["virtual_block_s_m"].IsScalar()) {
+      policy.has_virtual_block_s = true;
+      policy.virtual_block_s_m = item["virtual_block_s_m"].as<double>();
+    }
+    avoidance.sections.push_back(policy);
+  }
+  std::sort(avoidance.sections.begin(), avoidance.sections.end(), [](const auto & lhs, const auto & rhs) {
+    return lhs.start_s_m < rhs.start_s_m;
+  });
+  return avoidance;
+}
+
 class MpcSolver
 {
 public:
@@ -980,6 +1092,7 @@ public:
     steering_rate_max_ = mpc["steer_rate_max"].as<double>() / mpc["steering_tire_angle_gain_var"].as<double>();
     wp_id_offset_ = mpc["wp_id_offset"].as<int>();
     use_max_kappa_pred_ = mpc["use_max_kappa_pred"].as<bool>();
+    avoidance_config_ = load_avoidance_config(config);
     current_control_.assign(kNu * n_, 0.0);
   }
 
@@ -989,6 +1102,7 @@ public:
   void update_q(const int index, const double value) { q_diag_.at(index) = value; }
   void update_r(const int index, const double value) { r_diag_.at(index) = value; }
   void update_qn(const int index, const double value) { qn_diag_.at(index) = value; }
+  void update_avoidance_config(const AvoidanceConfig & config) { avoidance_config_ = config; }
 
   MpcProblem debug_problem()
   {
@@ -1082,6 +1196,142 @@ public:
   const std::vector<double> & prediction_y() const { return prediction_y_; }
 
 private:
+  double normalize_path_s(const double path_s) const
+  {
+    const double total = model_->reference_path().total_length();
+    if (total <= 0.0) {
+      return path_s;
+    }
+    double normalized = std::fmod(path_s, total);
+    if (normalized < 0.0) {
+      normalized += total;
+    }
+    return normalized;
+  }
+
+  const AvoidanceSectionPolicy * policy_at_s(const double path_s) const
+  {
+    if (!avoidance_config_.enabled) {
+      return nullptr;
+    }
+    const double local_s = normalize_path_s(path_s);
+    for (const auto & policy : avoidance_config_.sections) {
+      if (policy.start_s_m <= local_s && local_s <= policy.end_s_m) {
+        return &policy;
+      }
+    }
+    return nullptr;
+  }
+
+  const AvoidanceSectionPolicy * next_policy_after_s(const double path_s) const
+  {
+    if (!avoidance_config_.enabled || avoidance_config_.sections.empty()) {
+      return nullptr;
+    }
+    const double local_s = normalize_path_s(path_s);
+    for (const auto & policy : avoidance_config_.sections) {
+      if (local_s < policy.start_s_m) {
+        return &policy;
+      }
+    }
+
+    return nullptr;
+  }
+
+  double distance_to_policy_start(const AvoidanceSectionPolicy & policy, const double path_s) const
+  {
+    const double local_s = normalize_path_s(path_s);
+    if (local_s <= policy.start_s_m) {
+      return policy.start_s_m - local_s;
+    }
+    const double total = model_->reference_path().total_length();
+    if (total <= 0.0) {
+      return std::numeric_limits<double>::infinity();
+    }
+    return total - local_s + policy.start_s_m;
+  }
+
+  double lateral_target_for_line(
+    const AvoidanceLine line, const double wall_margin_m, const double lb, const double ub) const
+  {
+    const double center = (lb + ub) / 2.0;
+
+    const double margin = std::max(0.0, wall_margin_m);
+    double target = center;
+    if (line == AvoidanceLine::LeftWall) {
+      target = ub - margin;
+    } else if (line == AvoidanceLine::RightWall) {
+      target = lb + margin;
+    }
+    return std::clamp(target, lb, ub);
+  }
+
+  double lateral_target_for_policy(
+    const AvoidanceSectionPolicy * policy, const double path_s, const double lb, const double ub) const
+  {
+    const double center = (lb + ub) / 2.0;
+    if (!avoidance_config_.enabled) {
+      return center;
+    }
+
+    if (policy == nullptr) {
+      const AvoidanceSectionPolicy * next_policy = next_policy_after_s(path_s);
+      if (next_policy == nullptr || next_policy->blend_length_m <= 0.0) {
+        return center;
+      }
+
+      const double distance_to_start = distance_to_policy_start(*next_policy, path_s);
+      if (distance_to_start > next_policy->blend_length_m) {
+        return center;
+      }
+
+      const double next_target =
+        lateral_target_for_line(next_policy->line, next_policy->wall_margin_m, lb, ub);
+      const double alpha =
+        std::clamp(1.0 - distance_to_start / next_policy->blend_length_m, 0.0, 1.0);
+      return center + (next_target - center) * alpha;
+    }
+
+    const double current_target = lateral_target_for_line(policy->line, policy->wall_margin_m, lb, ub);
+    if (policy->blend_length_m <= 0.0) {
+      return current_target;
+    }
+
+    const double local_s = normalize_path_s(path_s);
+    const double distance_to_end = policy->end_s_m - local_s;
+    if (distance_to_end > policy->blend_length_m) {
+      return current_target;
+    }
+
+    const AvoidanceSectionPolicy * next_policy = next_policy_after_s(path_s);
+    const bool next_is_near =
+      next_policy != nullptr && (next_policy->start_s_m - policy->end_s_m) <= policy->blend_length_m;
+    const double end_target = next_is_near
+                                ? lateral_target_for_line(next_policy->line, next_policy->wall_margin_m, lb, ub)
+                                : center;
+    const double alpha = std::clamp(distance_to_end / policy->blend_length_m, 0.0, 1.0);
+    return end_target + (current_target - end_target) * alpha;
+  }
+
+  double speed_limit_for_policy(const AvoidanceSectionPolicy * policy, const double path_s) const
+  {
+    if (policy == nullptr || !policy->has_virtual_block_s) {
+      return v_max_;
+    }
+    const double local_s = normalize_path_s(path_s);
+    const double distance_to_block = policy->virtual_block_s_m - local_s;
+    if (distance_to_block < 0.0) {
+      return v_max_;
+    }
+    if (distance_to_block <= avoidance_config_.stop_distance_m) {
+      return 0.0;
+    }
+    if (distance_to_block <= avoidance_config_.slow_distance_m) {
+      return avoidance_config_.slow_speed_mps;
+    }
+    return v_max_;
+  }
+
   MpcProblem init_problem(const int horizon, const double safety_margin)
   {
     const int nx_n = kNx * (horizon + 1);
@@ -1125,9 +1375,12 @@ private:
     for (int n = 0; n < horizon; ++n) {
       const auto & current_wp = model_->reference_path().get_waypoint(model_->wp_id() + n);
       const auto & next_wp = model_->reference_path().get_waypoint(model_->wp_id() + n + 1);
+      const double path_s = model_->reference_path().s_at_index(model_->wp_id() + n);
+      const AvoidanceSectionPolicy * policy = policy_at_s(path_s);
+      const double policy_speed_limit = speed_limit_for_policy(policy, path_s);
       const double delta_s = std::hypot(next_wp.x - current_wp.x, next_wp.y - current_wp.y);
       const double kappa_ref = current_wp.kappa;
-      const double v_ref = std::clamp(current_wp.v_ref, 0.0, v_max_);
+      const double v_ref = std::clamp(current_wp.v_ref, 0.0, std::min(v_max_, policy_speed_limit));
       const auto [f, a_lin, b_lin] = model_->linearize(v_ref, kappa_ref, delta_s);
 
       const int row = (n + 1) * kNx;
@@ -1154,16 +1407,18 @@ private:
         }
       }
       const double vmax_dyn = std::sqrt(ay_max_ / (max_kappa_pred + 1.0e-12));
-      umax_dyn.at(kNu * n) = std::min(vmax_dyn, umax_dyn.at(kNu * n));
+      umax_dyn.at(kNu * n) = std::min({vmax_dyn, policy_speed_limit, umax_dyn.at(kNu * n)});
     }
 
     const auto [ub, lb] = model_->reference_path().get_path_constraints(model_->wp_id() + 1, horizon, safety_margin);
     xmin_dyn.at(0) = model_->spatial_state().e_y;
     xmax_dyn.at(0) = model_->spatial_state().e_y;
     for (int n = 0; n < horizon; ++n) {
+      const double path_s = model_->reference_path().s_at_index(model_->wp_id() + 1 + n);
+      const AvoidanceSectionPolicy * policy = policy_at_s(path_s);
       xmin_dyn.at(kNx + n * kNx) = lb.at(n);
       xmax_dyn.at(kNx + n * kNx) = ub.at(n);
-      xr.at(kNx + n * kNx) = (lb.at(n) + ub.at(n)) / 2.0;
+      xr.at(kNx + n * kNx) = lateral_target_for_policy(policy, path_s, lb.at(n), ub.at(n));
     }
 
     const int ineq_row = nx_n;
@@ -1260,6 +1515,7 @@ private:
   double steering_rate_max_{};
   int wp_id_offset_{};
   bool use_max_kappa_pred_{};
+  AvoidanceConfig avoidance_config_;
   double previous_steering_{};
   int infeasibility_counter_{};
   std::vector<double> current_control_;
@@ -1728,7 +1984,11 @@ private:
     bool boost_enabled = false;
     if (use_boost_acceleration_) {
       const auto deg2rad = [](const double deg) { return deg * kPi / 180.0; };
-      if (
+      if (u[0] < actual_v - 0.2 || u[0] < 0.5) {
+        boost_enabled = false;
+        acc = std::clamp(
+          kp_ * (u[0] - actual_v), config_["mpc"]["a_min"].as<double>(), config_["mpc"]["a_max"].as<double>());
+      } else if (
         std::abs(actual_v) > kmh_to_mps(44.0) ||
         (std::abs(actual_v) > kmh_to_mps(38.0) && std::abs(max_delta) > deg2rad(12.0)))
       {
