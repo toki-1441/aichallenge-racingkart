@@ -19,6 +19,35 @@ obstacles:
   # csv_path: "maps/occupancy_grid_map_obstacles.csv"
   radius: 1.25
 
+avoidance:
+  enabled: true
+  wall_margin_m: 0.4
+  blend_length_m: 4.0
+  slow_distance_m: 3.0
+  stop_distance_m: 1.0
+  slow_speed_kmh: 10.0
+  sections:
+    - section_id: 2
+      start_s_m: 7.9923651
+      end_s_m: 18.9818671
+      line: right_wall
+    - section_id: 3
+      start_s_m: 19.9809128
+      end_s_m: 29.9713692
+      line: right_wall
+    - section_id: 4
+      start_s_m: 30.9704148
+      end_s_m: 36.9646886
+      line: right_wall
+    - section_id: 5
+      start_s_m: 37.9637343
+      end_s_m: 60.9417840
+      line: right_wall
+    - section_id: 7
+      start_s_m: 85.9179249
+      end_s_m: 106.8978834
+      line: left_wall
+
 reference_path:
   update_by_topic: false # When true, 'circle' must be false
   # path from pkg share dir
@@ -93,7 +122,7 @@ mpc:
   ## --------- 中速 -------------- ##
   ## Lap1: 67s, Lap2: 64s
 
-  v_max: 20.0
+  v_max: 24.0
   ay_max: 6.5
   Q: [3000000.0, 90000000.0, 100000.0] # 低速だとインを攻めがちなので、あえて外に膨らむパラメータ
   QN: [1000000.0, 1000.0, 10000.0]
