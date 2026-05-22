@@ -48,6 +48,38 @@ avoidance:
       end_s_m: 106.8978834
       line: left_wall
 
+avoidance_planner:
+  enabled: true
+  candidate_wall_margin_m: 0.1
+  prediction_horizon_s: 3.0
+  prediction_dt_s: 0.2
+  ego_radius_m: 0.75
+  obstacle_radius_m: 0.85
+  collision_margin_m: 0.5
+  min_hold_time_s: 1.5
+  switch_cooldown_s: 1.0
+  switch_margin_m: 0.5
+  obstacle_timeout_s: 1.0
+  obstacle_v_max_mps: 30.0
+  obstacle_jump_threshold_m: 8.0
+  front_slow_distance_m: 3.0
+  front_stop_distance_m: 1.0
+  front_slow_speed_kmh: 10.0
+  emergency_override: true
+  default_line: center
+
+longitudinal_safety:
+  # The controller-independent longitudinal_safety_filter is now the primary safety layer.
+  # Keep the MPC-internal layer disabled to avoid double intervention.
+  enabled: false
+  comfortable_decel_mps2: 1.6
+  emergency_decel_mps2: 2.5
+  max_brake_decel_mps2: 2.5
+  latency_margin_s: 0.3
+  distance_margin_m: 1.0
+  hard_stop_distance_m: 1.0
+  min_speed_mps: 0.2
+
 reference_path:
   update_by_topic: false # When true, 'circle' must be false
   # path from pkg share dir
@@ -122,7 +154,7 @@ mpc:
   ## --------- 中速 -------------- ##
   ## Lap1: 67s, Lap2: 64s
 
-  v_max: 24.0
+  v_max: 28.0
   ay_max: 6.5
   Q: [3000000.0, 90000000.0, 100000.0] # 低速だとインを攻めがちなので、あえて外に膨らむパラメータ
   QN: [1000000.0, 1000.0, 10000.0]
