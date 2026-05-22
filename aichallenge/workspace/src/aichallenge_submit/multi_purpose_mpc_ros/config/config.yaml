@@ -62,8 +62,23 @@ avoidance_planner:
   obstacle_timeout_s: 1.0
   obstacle_v_max_mps: 30.0
   obstacle_jump_threshold_m: 8.0
+  front_slow_distance_m: 3.0
+  front_stop_distance_m: 1.0
+  front_slow_speed_kmh: 10.0
   emergency_override: true
   default_line: center
+
+longitudinal_safety:
+  # The controller-independent longitudinal_safety_filter is now the primary safety layer.
+  # Keep the MPC-internal layer disabled to avoid double intervention.
+  enabled: false
+  comfortable_decel_mps2: 1.6
+  emergency_decel_mps2: 2.5
+  max_brake_decel_mps2: 2.5
+  latency_margin_s: 0.3
+  distance_margin_m: 1.0
+  hard_stop_distance_m: 1.0
+  min_speed_mps: 0.2
 
 reference_path:
   update_by_topic: false # When true, 'circle' must be false

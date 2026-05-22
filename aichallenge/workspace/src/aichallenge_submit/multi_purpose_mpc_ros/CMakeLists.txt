@@ -83,6 +83,11 @@ if(BUILD_TESTING)
     test_mpc_cpp_qp_equivalence
     test/test_mpc_cpp_qp_equivalence.py
   )
+  ament_add_pytest_test(
+    test_longitudinal_safety_layer
+    test/test_longitudinal_safety_layer.py
+    APPEND_ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+  )
 endif()
 
 # create python virtual environment

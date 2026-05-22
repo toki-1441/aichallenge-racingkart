@@ -21,8 +21,10 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <autoware_auto_control_msgs/msg/ackermann_control_command.hpp>
 #include <geometry_msgs/msg/point.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <multi_purpose_mpc_ros_msgs/msg/ackermann_control_boost_command.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <osqp.h>
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -45,6 +47,7 @@ using AckermannControlCommand = autoware_auto_control_msgs::msg::AckermannContro
 using AckermannControlBoostCommand = multi_purpose_mpc_ros_msgs::msg::AckermannControlBoostCommand;
 using Marker = visualization_msgs::msg::Marker;
 using MarkerArray = visualization_msgs::msg::MarkerArray;
+using Path = nav_msgs::msg::Path;
 using V2XVehiclePositionArray = v2x_msgs::msg::V2XVehiclePositionArray;
 
 constexpr double kPi = 3.14159265358979323846;
@@ -171,8 +174,42 @@ struct LanePlannerConfig
   double obstacle_timeout_s{1.0};
   double obstacle_v_max_mps{30.0};
   double obstacle_jump_threshold_m{8.0};
+  double front_slow_distance_m{3.0};
+  double front_stop_distance_m{1.0};
+  double front_slow_speed_mps{kmh_to_mps(10.0)};
   bool emergency_override{true};
   AvoidanceLine default_line{AvoidanceLine::Center};
+};
+
+enum class LongitudinalSafetyState
+{
+  Clear,
+  Slowdown,
+  Brake,
+  EmergencyStop,
+};
+
+struct LongitudinalSafetyConfig
+{
+  bool enabled{true};
+  double comfortable_decel_mps2{1.6};
+  double emergency_decel_mps2{2.5};
+  double max_brake_decel_mps2{2.5};
+  double latency_margin_s{0.3};
+  double distance_margin_m{1.0};
+  double hard_stop_distance_m{1.0};
+  double min_speed_mps{0.2};
+};
+
+struct LongitudinalSafetyDecision
+{
+  LongitudinalSafetyState state{LongitudinalSafetyState::Clear};
+  double front_distance_m{std::numeric_limits<double>::infinity()};
+  double warning_distance_m{std::numeric_limits<double>::infinity()};
+  double brake_distance_m{std::numeric_limits<double>::infinity()};
+  double speed_limit_mps{std::numeric_limits<double>::infinity()};
+  double decel_mps2{};
+  std::string reason{"clear"};
 };
 
 struct V2XObstacleState
@@ -196,7 +233,9 @@ struct LaneCandidate
 {
   AvoidanceLine line{AvoidanceLine::Center};
   std::vector<geometry_msgs::msg::Point> points;
+  std::vector<double> distances_m;
   double min_obstacle_distance{std::numeric_limits<double>::infinity()};
+  double front_block_distance_m{std::numeric_limits<double>::infinity()};
   bool blocked{};
   std::string reason{"safe"};
 };
@@ -210,6 +249,20 @@ std::string avoidance_line_to_string(const AvoidanceLine line)
     return "right_wall";
   }
   return "center";
+}
+
+std::string longitudinal_safety_state_to_string(const LongitudinalSafetyState state)
+{
+  if (state == LongitudinalSafetyState::Slowdown) {
+    return "slowdown";
+  }
+  if (state == LongitudinalSafetyState::Brake) {
+    return "brake";
+  }
+  if (state == LongitudinalSafetyState::EmergencyStop) {
+    return "emergency_stop";
+  }
+  return "clear";
 }
 
 std_msgs::msg::ColorRGBA color_for_line(const AvoidanceLine line, const double alpha = 1.0)
@@ -1176,9 +1229,84 @@ LanePlannerConfig load_lane_planner_config(const YAML::Node & config)
   planner.obstacle_v_max_mps = node["obstacle_v_max_mps"].as<double>(planner.obstacle_v_max_mps);
   planner.obstacle_jump_threshold_m =
     node["obstacle_jump_threshold_m"].as<double>(planner.obstacle_jump_threshold_m);
+  planner.front_slow_distance_m = node["front_slow_distance_m"].as<double>(
+    config["avoidance"]["slow_distance_m"].as<double>(planner.front_slow_distance_m));
+  planner.front_stop_distance_m = node["front_stop_distance_m"].as<double>(
+    config["avoidance"]["stop_distance_m"].as<double>(planner.front_stop_distance_m));
+  planner.front_slow_speed_mps = kmh_to_mps(
+    node["front_slow_speed_kmh"].as<double>(config["avoidance"]["slow_speed_kmh"].as<double>(10.0)));
   planner.emergency_override = node["emergency_override"].as<bool>(planner.emergency_override);
   planner.default_line = parse_avoidance_line(node["default_line"].as<std::string>("center"));
   return planner;
+}
+
+LongitudinalSafetyConfig load_longitudinal_safety_config(const YAML::Node & config)
+{
+  LongitudinalSafetyConfig safety;
+  const YAML::Node node = config["longitudinal_safety"];
+  if (!node) {
+    return safety;
+  }
+
+  safety.enabled = node["enabled"].as<bool>(safety.enabled);
+  safety.comfortable_decel_mps2 =
+    node["comfortable_decel_mps2"].as<double>(safety.comfortable_decel_mps2);
+  safety.emergency_decel_mps2 = node["emergency_decel_mps2"].as<double>(safety.emergency_decel_mps2);
+  safety.max_brake_decel_mps2 = node["max_brake_decel_mps2"].as<double>(safety.max_brake_decel_mps2);
+  safety.latency_margin_s = node["latency_margin_s"].as<double>(safety.latency_margin_s);
+  safety.distance_margin_m = node["distance_margin_m"].as<double>(safety.distance_margin_m);
+  safety.hard_stop_distance_m = node["hard_stop_distance_m"].as<double>(safety.hard_stop_distance_m);
+  safety.min_speed_mps = node["min_speed_mps"].as<double>(safety.min_speed_mps);
+  return safety;
+}
+
+LongitudinalSafetyDecision evaluate_longitudinal_safety_impl(
+  const LongitudinalSafetyConfig & config, const double actual_v, const double front_distance_m)
+{
+  LongitudinalSafetyDecision decision;
+  decision.front_distance_m = front_distance_m;
+  if (!config.enabled || !std::isfinite(front_distance_m)) {
+    return decision;
+  }
+
+  const double speed = std::max(0.0, std::abs(actual_v));
+  const double comfortable_decel = std::max(0.1, config.comfortable_decel_mps2);
+  const double emergency_decel = std::max(comfortable_decel, config.emergency_decel_mps2);
+  const double max_brake_decel = std::max(emergency_decel, config.max_brake_decel_mps2);
+  const double latency_distance = speed * std::max(0.0, config.latency_margin_s);
+  const double margin = std::max(0.0, config.distance_margin_m);
+  const auto stopping_distance = [&](const double decel) {
+    return speed * speed / (2.0 * decel) + latency_distance + margin;
+  };
+  decision.warning_distance_m = stopping_distance(comfortable_decel);
+  decision.brake_distance_m = stopping_distance(emergency_decel);
+
+  const auto speed_limit_for_distance = [&](const double decel) {
+    const double usable_distance = std::max(0.0, front_distance_m - latency_distance - margin);
+    return std::sqrt(2.0 * decel * usable_distance);
+  };
+
+  if (front_distance_m <= config.hard_stop_distance_m) {
+    decision.state = LongitudinalSafetyState::EmergencyStop;
+    decision.speed_limit_mps = 0.0;
+    decision.decel_mps2 = max_brake_decel;
+    decision.reason = "hard_stop_distance";
+  } else if (front_distance_m <= decision.brake_distance_m) {
+    decision.state = LongitudinalSafetyState::Brake;
+    decision.speed_limit_mps = speed_limit_for_distance(emergency_decel);
+    decision.decel_mps2 = emergency_decel;
+    decision.reason = "brake_distance";
+  } else if (front_distance_m <= decision.warning_distance_m) {
+    decision.state = LongitudinalSafetyState::Slowdown;
+    decision.speed_limit_mps = speed_limit_for_distance(comfortable_decel);
+    decision.decel_mps2 = comfortable_decel;
+    decision.reason = "warning_distance";
+  }
+
+  if (decision.state != LongitudinalSafetyState::Clear && decision.speed_limit_mps < config.min_speed_mps) {
+    decision.speed_limit_mps = 0.0;
+  }
+  return decision;
 }
 
 double lateral_target_for_line(
@@ -1229,6 +1357,11 @@ public:
   {
     selected_avoidance_line_ = line;
     has_selected_avoidance_line_ = enabled;
+  }
+  void update_planner_speed_limit(const double speed_limit_mps, const bool enabled)
+  {
+    planner_speed_limit_mps_ = speed_limit_mps;
+    has_planner_speed_limit_ = enabled;
   }
 
   MpcProblem debug_problem()
@@ -1502,7 +1635,10 @@ private:
       const auto & next_wp = model_->reference_path().get_waypoint(model_->wp_id() + n + 1);
       const double path_s = model_->reference_path().s_at_index(model_->wp_id() + n);
       const AvoidanceSectionPolicy * policy = policy_at_s(path_s);
-      const double policy_speed_limit = speed_limit_for_policy(policy, path_s);
+      double policy_speed_limit = speed_limit_for_policy(policy, path_s);
+      if (has_planner_speed_limit_) {
+        policy_speed_limit = std::min(policy_speed_limit, planner_speed_limit_mps_);
+      }
       const double delta_s = std::hypot(next_wp.x - current_wp.x, next_wp.y - current_wp.y);
       const double kappa_ref = current_wp.kappa;
       const double v_ref = std::clamp(current_wp.v_ref, 0.0, std::min(v_max_, policy_speed_limit));
@@ -1643,6 +1779,8 @@ private:
   AvoidanceConfig avoidance_config_;
   AvoidanceLine selected_avoidance_line_{AvoidanceLine::Center};
   bool has_selected_avoidance_line_{};
+  double planner_speed_limit_mps_{std::numeric_limits<double>::infinity()};
+  bool has_planner_speed_limit_{};
   double previous_steering_{};
   int infeasibility_counter_{};
   std::vector<double> current_control_;
@@ -1900,6 +2038,24 @@ int run_sequence_benchmark(const int start_wp_id, const int steps)
   return 0;
 }
 
+int run_safety_dump(const double speed_kmh, const double front_distance_m)
+{
+  const std::string package_path = ament_index_cpp::get_package_share_directory("multi_purpose_mpc_ros") + "/";
+  const YAML::Node config = YAML::LoadFile(package_path + "config/config.yaml");
+  const LongitudinalSafetyConfig safety_config = load_longitudinal_safety_config(config);
+  const LongitudinalSafetyDecision decision =
+    evaluate_longitudinal_safety_impl(safety_config, kmh_to_mps(speed_kmh), front_distance_m);
+
+  std::cout << "state," << longitudinal_safety_state_to_string(decision.state) << "\n";
+  std::cout << "speed_limit_mps," << std::setprecision(17) << decision.speed_limit_mps << "\n";
+  std::cout << "decel_mps2," << std::setprecision(17) << decision.decel_mps2 << "\n";
+  std::cout << "front_distance_m," << std::setprecision(17) << decision.front_distance_m << "\n";
+  std::cout << "warning_distance_m," << std::setprecision(17) << decision.warning_distance_m << "\n";
+  std::cout << "brake_distance_m," << std::setprecision(17) << decision.brake_distance_m << "\n";
+  std::cout << "reason," << decision.reason << "\n";
+  return 0;
+}
+
 class MpcControllerCpp : public rclcpp::Node
 {
 public:
@@ -1918,6 +2074,7 @@ public:
     use_boost_acceleration_ = get_parameter("use_boost_acceleration").as_bool();
     config_ = YAML::LoadFile(config_path_);
     lane_planner_config_ = load_lane_planner_config(config_);
+    longitudinal_safety_config_ = load_longitudinal_safety_config(config_);
     selected_lane_ = lane_planner_config_.default_line;
     ref_vel_sections_ = load_ref_vel_sections(ref_vel_config_path_);
 
@@ -1953,6 +2110,7 @@ public:
       command_raw_pub_ = create_publisher<AckermannControlCommand>("/control/command/control_cmd_raw", 1);
     }
     prediction_pub_ = create_publisher<MarkerArray>("/mpc/prediction", 1);
+    prediction_path_pub_ = create_publisher<Path>("/mpc/predicted_path", 1);
     prediction_dummy_pub_ = create_publisher<MarkerArray>(
       "/planning/scenario_planning/lane_driving/motion_planning/obstacle_stop_planner/virtual_wall", 1);
     ref_path_pub_ = create_publisher<MarkerArray>("/mpc/ref_path", rclcpp::QoS(1).transient_local());
@@ -2053,10 +2211,12 @@ private:
       std::max(2, static_cast<int>(std::ceil(lane_planner_config_.prediction_horizon_s / dt)) + 1);
     const double speed = std::max(1.0, std::abs(actual_v));
     candidate.points.reserve(sample_count);
+    candidate.distances_m.reserve(sample_count);
     for (int sample = 0; sample < sample_count; ++sample) {
       const double distance = speed * dt * static_cast<double>(sample);
       const int waypoint_index = waypoint_index_at_distance(start_waypoint, distance);
       candidate.points.push_back(point_for_line(waypoint_index, line, lane_planner_config_.candidate_wall_margin_m));
+      candidate.distances_m.push_back(distance);
     }
     return candidate;
   }
@@ -2075,6 +2235,7 @@ private:
   void evaluate_candidate_collision(LaneCandidate & candidate, const std::vector<V2XObstacleState> & obstacles) const
   {
     candidate.min_obstacle_distance = std::numeric_limits<double>::infinity();
+    candidate.front_block_distance_m = std::numeric_limits<double>::infinity();
     candidate.blocked = false;
     candidate.reason = "safe";
 
@@ -2086,16 +2247,24 @@ private:
     const double collision_distance =
       lane_planner_config_.ego_radius_m + lane_planner_config_.obstacle_radius_m +
       lane_planner_config_.collision_margin_m;
+    const auto & ego = model_->temporal_state();
+    const double dir_x = std::cos(ego.psi);
+    const double dir_y = std::sin(ego.psi);
     for (size_t index = 0; index < candidate.points.size(); ++index) {
       const double t = dt * static_cast<double>(index);
       const auto & point = candidate.points.at(index);
       for (const auto & obstacle : obstacles) {
         const double ox = obstacle.x + obstacle.vx * t;
         const double oy = obstacle.y + obstacle.vy * t;
+        const double forward_m = (ox - ego.x) * dir_x + (oy - ego.y) * dir_y;
+        if (forward_m <= 0.0) {
+          continue;
+        }
         const double distance = std::hypot(point.x - ox, point.y - oy);
         candidate.min_obstacle_distance = std::min(candidate.min_obstacle_distance, distance);
         if (distance <= collision_distance) {
           candidate.blocked = true;
+          candidate.front_block_distance_m = std::min(candidate.front_block_distance_m, forward_m);
           candidate.reason = "blocked:" + obstacle.vehicle_id;
         }
       }
@@ -2185,15 +2354,74 @@ private:
     return selected_lane_;
   }
 
+  double front_speed_limit_for_selected_lane(const std::vector<LaneCandidate> & candidates) const
+  {
+    const LaneCandidate * selected_candidate = find_candidate(candidates, selected_lane_);
+    if (selected_candidate == nullptr || !std::isfinite(selected_candidate->front_block_distance_m)) {
+      return std::numeric_limits<double>::infinity();
+    }
+
+    // This intentionally uses forward path distance along the selected lane.
+    // Obstacles near the vehicle but outside the selected forward corridor do not trigger braking.
+    const double distance = selected_candidate->front_block_distance_m;
+    if (distance <= lane_planner_config_.front_stop_distance_m) {
+      return 0.0;
+    }
+    if (distance <= lane_planner_config_.front_slow_distance_m) {
+      return lane_planner_config_.front_slow_speed_mps;
+    }
+    return std::numeric_limits<double>::infinity();
+  }
+
+  double front_block_distance_for_selected_lane(const std::vector<LaneCandidate> & candidates) const
+  {
+    const LaneCandidate * selected_candidate = find_candidate(candidates, selected_lane_);
+    if (selected_candidate == nullptr) {
+      return std::numeric_limits<double>::infinity();
+    }
+    return selected_candidate->front_block_distance_m;
+  }
+
+  LongitudinalSafetyDecision evaluate_longitudinal_safety(
+    const double actual_v, const double front_distance_m) const
+  {
+    return evaluate_longitudinal_safety_impl(longitudinal_safety_config_, actual_v, front_distance_m);
+  }
+
+  void apply_longitudinal_safety(
+    const LongitudinalSafetyDecision & decision, const double actual_v, std::array<double, 2> & command,
+    double & acc, bool & boost_enabled) const
+  {
+    if (decision.state == LongitudinalSafetyState::Clear) {
+      return;
+    }
+
+    boost_enabled = false;
+    if (std::isfinite(decision.speed_limit_mps)) {
+      command[0] = std::min(command[0], decision.speed_limit_mps);
+    }
+    if (decision.state == LongitudinalSafetyState::EmergencyStop) {
+      command[0] = 0.0;
+      acc = -std::max(0.1, longitudinal_safety_config_.max_brake_decel_mps2);
+      return;
+    }
+    if (actual_v > command[0] + 0.1) {
+      acc = std::min(acc, -std::max(0.1, decision.decel_mps2));
+    }
+  }
+
   void update_lane_planner(const rclcpp::Time & stamp, const double actual_v)
   {
     if (!lane_planner_config_.enabled) {
       mpc_->update_selected_avoidance_line(lane_planner_config_.default_line, false);
+      mpc_->update_planner_speed_limit(std::numeric_limits<double>::infinity(), false);
+      active_planner_speed_limit_mps_ = std::numeric_limits<double>::infinity();
+      active_front_block_distance_m_ = std::numeric_limits<double>::infinity();
       last_lane_candidates_.clear();
       return;
     }
 
-    const int start_waypoint = model_->wp_id() + config_["mpc"]["wp_id_offset"].as<int>();
+    const int start_waypoint = model_->wp_id();
     last_lane_candidates_.clear();
     for (const auto line : {AvoidanceLine::Center, AvoidanceLine::LeftWall, AvoidanceLine::RightWall}) {
       last_lane_candidates_.push_back(build_lane_candidate(line, start_waypoint, actual_v));
@@ -2207,15 +2435,19 @@ private:
 
     const AvoidanceLine selected = select_lane(last_lane_candidates_, stamp);
     mpc_->update_selected_avoidance_line(selected, true);
+    const double speed_limit = front_speed_limit_for_selected_lane(last_lane_candidates_);
+    mpc_->update_planner_speed_limit(speed_limit, std::isfinite(speed_limit));
+    active_planner_speed_limit_mps_ = speed_limit;
+    active_front_block_distance_m_ = front_block_distance_for_selected_lane(last_lane_candidates_);
   }
 
   void update_v2x(const V2XVehiclePositionArray & msg)
   {
-    const double fallback_stamp = now().seconds();
+    const double receive_stamp = now().seconds();
     for (const auto & vehicle : msg.vehicles) {
-      double stamp = stamp_to_seconds(vehicle.header.stamp);
-      if (stamp <= 0.0) {
-        stamp = fallback_stamp;
+      double measurement_stamp = stamp_to_seconds(vehicle.header.stamp);
+      if (measurement_stamp <= 0.0) {
+        measurement_stamp = receive_stamp;
       }
       const double x = vehicle.position.x;
       const double y = vehicle.position.y;
@@ -2226,7 +2458,7 @@ private:
       if (sample_it != v2x_samples_.end()) {
         const auto & previous = sample_it->second;
         const double jump = std::hypot(x - previous.x, y - previous.y);
-        const double dt = stamp - previous.stamp;
+        const double dt = measurement_stamp - previous.stamp;
         if (jump <= lane_planner_config_.obstacle_jump_threshold_m && dt > 1.0e-3) {
           vx = (x - previous.x) / dt;
           vy = (y - previous.y) / dt;
@@ -2236,8 +2468,8 @@ private:
           }
         }
       }
-      v2x_samples_[vehicle.vehicle_id] = V2XSample{stamp, x, y};
-      v2x_obstacles_[vehicle.vehicle_id] = V2XObstacleState{vehicle.vehicle_id, stamp, x, y, vx, vy};
+      v2x_samples_[vehicle.vehicle_id] = V2XSample{measurement_stamp, x, y};
+      v2x_obstacles_[vehicle.vehicle_id] = V2XObstacleState{vehicle.vehicle_id, receive_stamp, x, y, vx, vy};
     }
   }
 
@@ -2324,6 +2556,14 @@ private:
     update_lane_planner(current_time, actual_v);
 
     auto [u, max_delta] = mpc_->get_control();
+    longitudinal_safety_decision_ =
+      evaluate_longitudinal_safety(actual_v, active_front_block_distance_m_);
+    if (std::isfinite(longitudinal_safety_decision_.speed_limit_mps)) {
+      u[0] = std::min(u[0], longitudinal_safety_decision_.speed_limit_mps);
+    }
+    if (std::isfinite(active_planner_speed_limit_mps_)) {
+      u[0] = std::min(u[0], active_planner_speed_limit_mps_);
+    }
 
     if (!ref_vel_sections_.empty()) {
       const double ref_vel_mps = std::min(
@@ -2370,6 +2610,7 @@ private:
         kp_ * (u[0] - actual_v), config_["mpc"]["a_min"].as<double>(), config_["mpc"]["a_max"].as<double>());
     }
     acc = last_acc_ + (acc - last_acc_) * config_["mpc"]["accel_low_pass_gain"].as<double>();
+    apply_longitudinal_safety(longitudinal_safety_decision_, actual_v, u, acc, boost_enabled);
     u[1] = last_u_[1] + (u[1] - last_u_[1]) * config_["mpc"]["steer_low_pass_gain"].as<double>();
 
     last_acc_ = acc;
@@ -2414,10 +2655,13 @@ private:
   void publish_prediction_marker()
   {
     MarkerArray array;
+    Path path;
+    path.header.frame_id = "map";
+    path.header.stamp = now();
     for (size_t i = 0; i < mpc_->prediction_x().size(); ++i) {
       Marker marker;
       marker.header.frame_id = "map";
-      marker.header.stamp = now();
+      marker.header.stamp = path.header.stamp;
       marker.ns = "mpc_pred";
       marker.id = static_cast<int>(i);
       marker.type = Marker::SPHERE;
@@ -2433,8 +2677,17 @@ private:
       marker.color.b = 209.0 / 255.0;
       marker.color.a = 1.0;
       array.markers.push_back(marker);
+
+      geometry_msgs::msg::PoseStamped pose;
+      pose.header = path.header;
+      pose.pose.position.x = mpc_->prediction_x().at(i);
+      pose.pose.position.y = mpc_->prediction_y().at(i);
+      pose.pose.position.z = 0.0;
+      pose.pose.orientation.w = 1.0;
+      path.poses.push_back(pose);
     }
     prediction_pub_->publish(array);
+    prediction_path_pub_->publish(path);
     prediction_dummy_pub_->publish(array);
   }
 
@@ -2511,8 +2764,12 @@ private:
       const std::string distance_text = std::isfinite(candidate.min_obstacle_distance)
                                           ? std::to_string(candidate.min_obstacle_distance).substr(0, 4) + "m"
                                           : "inf";
+      const std::string front_text = std::isfinite(candidate.front_block_distance_m)
+                                       ? " front " +
+                                           std::to_string(candidate.front_block_distance_m).substr(0, 4) + "m"
+                                       : "";
       text.text = avoidance_line_to_string(candidate.line) + "\n" +
-                  (candidate.blocked ? "blocked" : "safe") + " " + distance_text;
+                  (candidate.blocked ? "blocked" : "safe") + " " + distance_text + front_text;
       debug_array.markers.push_back(text);
     }
 
@@ -2531,7 +2788,21 @@ private:
       text.color.g = 0.0;
       text.color.b = 1.0;
       text.color.a = 1.0;
-      text.text = "selected: " + avoidance_line_to_string(selected_lane_) + "\nreason: " + lane_selection_reason_;
+      const double selected_speed_limit = front_speed_limit_for_selected_lane(last_lane_candidates_);
+      const std::string speed_text = std::isfinite(selected_speed_limit)
+                                       ? "\nspeed_limit: " +
+                                           std::to_string(selected_speed_limit * 3.6).substr(0, 4) + "km/h"
+                                       : "";
+      const std::string safety_text =
+        "\nsafety: " + longitudinal_safety_state_to_string(longitudinal_safety_decision_.state) +
+        "\nfront: " + (std::isfinite(longitudinal_safety_decision_.front_distance_m)
+                         ? std::to_string(longitudinal_safety_decision_.front_distance_m).substr(0, 4) + "m"
+                         : "inf") +
+        "\nbrake_d: " + (std::isfinite(longitudinal_safety_decision_.brake_distance_m)
+                           ? std::to_string(longitudinal_safety_decision_.brake_distance_m).substr(0, 4) + "m"
+                           : "inf");
+      text.text = "selected: " + avoidance_line_to_string(selected_lane_) + "\nreason: " + lane_selection_reason_ +
+                  speed_text + safety_text;
       debug_array.markers.push_back(text);
     }
 
@@ -2593,6 +2864,7 @@ private:
   std::string ref_vel_config_path_;
   YAML::Node config_;
   LanePlannerConfig lane_planner_config_;
+  LongitudinalSafetyConfig longitudinal_safety_config_;
   std::unique_ptr<OccupancyMap> occupancy_map_;
   std::unique_ptr<ReferencePath> reference_path_;
   std::unique_ptr<BicycleModel> model_;
@@ -2607,6 +2879,9 @@ private:
   bool enable_control_{true};
   AvoidanceLine selected_lane_{AvoidanceLine::Center};
   bool has_lane_selection_{};
+  double active_planner_speed_limit_mps_{std::numeric_limits<double>::infinity()};
+  double active_front_block_distance_m_{std::numeric_limits<double>::infinity()};
+  LongitudinalSafetyDecision longitudinal_safety_decision_;
   double selected_lane_since_sec_{};
   double last_lane_switch_sec_{};
   std::string lane_selection_reason_{"disabled"};
@@ -2623,6 +2898,7 @@ private:
   rclcpp::Publisher<AckermannControlCommand>::SharedPtr command_raw_pub_;
   rclcpp::Publisher<AckermannControlBoostCommand>::SharedPtr boost_command_pub_;
   rclcpp::Publisher<MarkerArray>::SharedPtr prediction_pub_;
+  rclcpp::Publisher<Path>::SharedPtr prediction_path_pub_;
   rclcpp::Publisher<MarkerArray>::SharedPtr prediction_dummy_pub_;
   rclcpp::Publisher<MarkerArray>::SharedPtr ref_path_pub_;
   rclcpp::Publisher<MarkerArray>::SharedPtr ref_path_dummy_pub_;
@@ -2645,12 +2921,20 @@ int main(int argc, char ** argv)
 {
   int dump_wp_id = 0;
   int sequence_steps = 20;
+  double safety_speed_kmh = 20.0;
+  double safety_distance_m = std::numeric_limits<double>::infinity();
   for (int i = 1; i + 1 < argc; ++i) {
     if (std::string(argv[i]) == "--dump_wp_id") {
       dump_wp_id = std::stoi(argv[i + 1]);
     }
     if (std::string(argv[i]) == "--sequence_steps") {
       sequence_steps = std::stoi(argv[i + 1]);
+    }
+    if (std::string(argv[i]) == "--safety_speed_kmh") {
+      safety_speed_kmh = std::stod(argv[i + 1]);
+    }
+    if (std::string(argv[i]) == "--safety_distance_m") {
+      safety_distance_m = std::stod(argv[i + 1]);
     }
   }
   for (int i = 1; i + 1 < argc; ++i) {
@@ -2662,6 +2946,11 @@ int main(int argc, char ** argv)
     }
     if (std::string(argv[i]) == "--benchmark_sequence") {
       return run_sequence_benchmark(dump_wp_id, sequence_steps);
+    }
+  }
+  for (int i = 1; i < argc; ++i) {
+    if (std::string(argv[i]) == "--dump_safety") {
+      return run_safety_dump(safety_speed_kmh, safety_distance_m);
     }
   }
   rclcpp::init(argc, argv);

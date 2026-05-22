@@ -3,6 +3,8 @@
   <arg name="use_sim_time" default="true"/>
   <arg name="use_obstacle_avoidance" default="false"/>
   <arg name="use_cpp_mpc" default="true"/>
+  <arg name="output_control_cmd_topic" default="/control/command/control_cmd"/>
+  <arg name="raw_debug_control_cmd_topic" default="/control/command/control_cmd_raw"/>
 
 
   <node pkg="multi_purpose_mpc_ros" exec="run_mpc_controller.bash"
@@ -14,6 +16,8 @@
     <param name="use_boost_acceleration" value="false"/>
     <param name="use_obstacle_avoidance" value="$(var use_obstacle_avoidance)"/>
     <param name="use_stats" value="false"/>
+    <remap from="/control/command/control_cmd" to="$(var output_control_cmd_topic)"/>
+    <remap from="/control/command/control_cmd_raw" to="$(var raw_debug_control_cmd_topic)"/>
   </node>
 
   <node pkg="multi_purpose_mpc_ros" exec="mpc_controller_cpp"
@@ -25,5 +29,7 @@
     <param name="use_stats" value="false"/>
     <param name="config_path" value="$(find-pkg-share multi_purpose_mpc_ros)/config/config.yaml"/>
     <param name="ref_vel_config_path" value="$(find-pkg-share multi_purpose_mpc_ros)/config/ref_vel.yaml"/>
+    <remap from="/control/command/control_cmd" to="$(var output_control_cmd_topic)"/>
+    <remap from="/control/command/control_cmd_raw" to="$(var raw_debug_control_cmd_topic)"/>
   </node>
 </launch>
