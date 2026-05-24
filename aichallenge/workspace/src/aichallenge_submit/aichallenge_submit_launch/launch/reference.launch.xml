@@ -21,7 +21,7 @@
   <arg name="control_method" default="mpc"
        description="Select control: mpc, pure_pursuit, tiny_lidar_net, joycon, keyboard"/>
   <arg name="launch_v2x_avoidance_planner" default="false" description="Generate a wall-safe V2X avoidance trajectory"/>
-  <arg name="launch_longitudinal_safety_filter" default="true" description="Filter control_cmd with V2X longitudinal safety"/>
+  <arg name="launch_longitudinal_safety_filter" default="false" description="Filter control_cmd with V2X longitudinal safety"/>
   <arg name="launch_v2x_safety_debug" default="false" description="Publish synthetic V2X obstacles for safety debugging"/>
   <arg name="v2x_safety_debug_mode" default="trajectory_relative" description="V2X debug mode: trajectory_relative, ego_relative, or map_static"/>
   <arg name="v2x_safety_debug_scenario" default="front_slowdown" description="V2X debug scenario"/>
