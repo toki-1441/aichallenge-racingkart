@@ -21,6 +21,7 @@ USE_CPP_MPC ?= true
 V2X_SAFETY_DEBUG ?= false
 V2X_SAFETY_DEBUG_MODE ?= trajectory_relative
 V2X_SAFETY_DEBUG_SCENARIO ?= front_slowdown
+SIMULATOR_DC ?= docker compose -f docker-compose.yml -f docker-compose.gpu.yml
 
 TIMESTAMP := $(shell date +%Y%m%d-%H%M%S)
 LOG_DIR := /output/$(TIMESTAMP)
@@ -37,7 +38,7 @@ autoware-vehicle:
 # run autoware for simulator
 autoware-simulator:
 	@echo "Start Autoware for AWSIM"
-	LOG_DIR=$(LOG_DIR) RUN_MODE=awsim ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) USE_CPP_MPC=$(USE_CPP_MPC) V2X_SAFETY_DEBUG=$(V2X_SAFETY_DEBUG) V2X_SAFETY_DEBUG_MODE=$(V2X_SAFETY_DEBUG_MODE) V2X_SAFETY_DEBUG_SCENARIO=$(V2X_SAFETY_DEBUG_SCENARIO) docker compose up -d autoware
+	LOG_DIR=$(LOG_DIR) RUN_MODE=awsim-no-viz ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) USE_CPP_MPC=$(USE_CPP_MPC) V2X_SAFETY_DEBUG=$(V2X_SAFETY_DEBUG) V2X_SAFETY_DEBUG_MODE=$(V2X_SAFETY_DEBUG_MODE) V2X_SAFETY_DEBUG_SCENARIO=$(V2X_SAFETY_DEBUG_SCENARIO) docker compose up -d autoware
 
 autoware-simulation: autoware-simulator
 
@@ -62,7 +63,7 @@ awsim-request-reset:
 # run simulator (docker compose up -d simulator)
 simulator:
 	@echo "Start AWSIM (SIM_MODE=$(SIM_MODE))"
-	LOG_DIR=$(LOG_DIR) SIM_MODE=$(SIM_MODE) ROS_DOMAIN_ID=0 docker compose up -d simulator
+	LOG_DIR=$(LOG_DIR) SIM_MODE=$(SIM_MODE) ROS_DOMAIN_ID=0 $(SIMULATOR_DC) up -d simulator
 
 # racing kart (docker compose up -d driver)
 driver:
