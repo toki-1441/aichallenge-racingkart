@@ -34,3 +34,11 @@
     v2x_timeout_policy: pass_through
     obstacle_v_max_mps: 30.0
     obstacle_jump_threshold_m: 8.0
+    obstacle_velocity_history_size: 5
+    obstacle_min_velocity_dt_s: 0.05
+    obstacle_velocity_smoothing_gain: 0.5
+    enable_following_speed_control: true
+    follow_distance_m: 8.0
+    follow_time_gap_s: 0.8
+    relative_speed_allowance_mps: 0.3
+    min_follow_speed_mps: 0.0

@@ -45,6 +45,10 @@ class SafetyDecision:
     risk_class: str = "SAFE"
     prediction_source: str = "none"
     opponent_prediction_source: str = "none"
+    opponent_observed_speed_mps: float = math.inf
+    relative_speed_mps: float = math.inf
+    follow_speed_limit_mps: float = math.inf
+    follow_distance_m: float = math.inf
 
 
 @dataclass
@@ -55,6 +59,7 @@ class EgoPredictionPoint:
     yaw: float
     distance_m: float
     source: str
+    speed_mps: float = 0.0
 
 
 @dataclass
@@ -67,14 +72,28 @@ class RiskMetrics:
     opponent_prediction_source: str = "none"
     collision_x: float = math.inf
     collision_y: float = math.inf
+    opponent_observed_speed_mps: float = math.inf
+    relative_speed_mps: float = math.inf
+    follow_speed_limit_mps: float = math.inf
+    follow_distance_m: float = math.inf
 
 
 class V2XTracker:
-    def __init__(self, v_max_mps: float, jump_threshold_m: float) -> None:
+    def __init__(
+        self,
+        v_max_mps: float,
+        jump_threshold_m: float,
+        history_size: int,
+        min_velocity_dt_s: float,
+        velocity_smoothing_gain: float,
+    ) -> None:
         self._v_max_mps = v_max_mps
         self._jump_threshold_m = jump_threshold_m
+        self._min_velocity_dt_s = min_velocity_dt_s
+        self._velocity_smoothing_gain = min(max(velocity_smoothing_gain, 0.0), 1.0)
         self._samples: Dict[str, Deque[Tuple[float, float, float]]] = {}
         self._states: Dict[str, ObstacleState] = {}
+        self._history_size = max(2, history_size)
 
     def update(self, msg: V2XVehiclePositionArray, receive_stamp: float) -> None:
         for vehicle in msg.vehicles:
@@ -84,23 +103,12 @@ class V2XTracker:
 
             x = float(vehicle.position.x)
             y = float(vehicle.position.y)
-            samples = self._samples.setdefault(vehicle.vehicle_id, deque(maxlen=2))
+            samples = self._samples.setdefault(vehicle.vehicle_id, deque(maxlen=self._history_size))
             if samples and math.hypot(x - samples[-1][1], y - samples[-1][2]) > self._jump_threshold_m:
                 samples.clear()
             samples.append((measurement_stamp, x, y))
 
-            vx = 0.0
-            vy = 0.0
-            if len(samples) == 2:
-                t0, x0, y0 = samples[0]
-                t1, x1, y1 = samples[1]
-                dt = t1 - t0
-                if dt > 1.0e-3:
-                    vx = (x1 - x0) / dt
-                    vy = (y1 - y0) / dt
-                    if math.hypot(vx, vy) > self._v_max_mps:
-                        vx = 0.0
-                        vy = 0.0
+            vx, vy = self._estimate_velocity(vehicle.vehicle_id, samples)
 
             self._states[vehicle.vehicle_id] = ObstacleState(
                 vehicle.vehicle_id, receive_stamp, x, y, vx, vy
@@ -108,6 +116,39 @@ class V2XTracker:
 
     def active_states(self, now_sec: float, timeout_s: float) -> List[ObstacleState]:
         return [state for state in self._states.values() if now_sec - state.stamp <= timeout_s]
+
+    def _estimate_velocity(
+        self, vehicle_id: str, samples: Deque[Tuple[float, float, float]]
+    ) -> Tuple[float, float]:
+        if len(samples) < 2:
+            previous = self._states.get(vehicle_id)
+            return (previous.vx, previous.vy) if previous is not None else (0.0, 0.0)
+
+        t1, x1, y1 = samples[-1]
+        velocity_samples: List[Tuple[float, float]] = []
+        for t0, x0, y0 in list(samples)[:-1]:
+            dt = t1 - t0
+            if dt >= self._min_velocity_dt_s:
+                vx = (x1 - x0) / dt
+                vy = (y1 - y0) / dt
+                if math.hypot(vx, vy) <= self._v_max_mps:
+                    velocity_samples.append((vx, vy))
+
+        if not velocity_samples:
+            previous = self._states.get(vehicle_id)
+            return (previous.vx, previous.vy) if previous is not None else (0.0, 0.0)
+
+        raw_vx = sum(vx for vx, _ in velocity_samples) / len(velocity_samples)
+        raw_vy = sum(vy for _, vy in velocity_samples) / len(velocity_samples)
+        previous = self._states.get(vehicle_id)
+        if previous is None:
+            return raw_vx, raw_vy
+
+        gain = self._velocity_smoothing_gain
+        return (
+            previous.vx + (raw_vx - previous.vx) * gain,
+            previous.vy + (raw_vy - previous.vy) * gain,
+        )
 
 
 class LongitudinalSafetyFilterNode(Node):
@@ -127,6 +168,9 @@ class LongitudinalSafetyFilterNode(Node):
         self._tracker = V2XTracker(
             v_max_mps=float(self._p("obstacle_v_max_mps")),
             jump_threshold_m=float(self._p("obstacle_jump_threshold_m")),
+            history_size=int(self._p("obstacle_velocity_history_size")),
+            min_velocity_dt_s=float(self._p("obstacle_min_velocity_dt_s")),
+            velocity_smoothing_gain=float(self._p("obstacle_velocity_smoothing_gain")),
         )
 
         self.create_subscription(
@@ -196,6 +240,14 @@ class LongitudinalSafetyFilterNode(Node):
         self.declare_parameter("v2x_timeout_policy", "pass_through")
         self.declare_parameter("obstacle_v_max_mps", 30.0)
         self.declare_parameter("obstacle_jump_threshold_m", 8.0)
+        self.declare_parameter("obstacle_velocity_history_size", 5)
+        self.declare_parameter("obstacle_min_velocity_dt_s", 0.05)
+        self.declare_parameter("obstacle_velocity_smoothing_gain", 0.5)
+        self.declare_parameter("enable_following_speed_control", True)
+        self.declare_parameter("follow_distance_m", 8.0)
+        self.declare_parameter("follow_time_gap_s", 0.8)
+        self.declare_parameter("relative_speed_allowance_mps", 0.3)
+        self.declare_parameter("min_follow_speed_mps", 0.0)
 
     def _p(self, name: str):
         return self.get_parameter(name).value
@@ -287,6 +339,10 @@ class LongitudinalSafetyFilterNode(Node):
         opponent_source = "none"
         collision_x = math.inf
         collision_y = math.inf
+        closest_opponent_speed = math.inf
+        closest_relative_speed = math.inf
+        follow_distance = math.inf
+        follow_speed_limit = math.inf
         for obstacle in obstacles:
             opponent_prediction = self._opponent_prediction(obstacle, ego_prediction)
             self._last_opponent_predictions.append(opponent_prediction)
@@ -294,13 +350,33 @@ class LongitudinalSafetyFilterNode(Node):
                 opponent_source = opponent_prediction[0].source
             for point, opponent_point in zip(ego_prediction, opponent_prediction):
                 distance = math.hypot(opponent_point.x - point.x, opponent_point.y - point.y)
-                min_predicted_distance = min(min_predicted_distance, distance)
+                if distance < min_predicted_distance:
+                    min_predicted_distance = distance
+                    closest_opponent_speed = opponent_point.speed_mps
+                    closest_relative_speed = point.speed_mps - opponent_point.speed_mps
+                    follow_distance = point.distance_m
                 if distance <= collision_distance and math.isinf(predicted_ttc):
                     predicted_ttc = point.t
                     predicted_collision_distance = point.distance_m
                     collision_x = point.x
                     collision_y = point.y
                     self._last_collision_point = Point(x=point.x, y=point.y, z=0.9)
+
+        if bool(self._p("enable_following_speed_control")) and math.isfinite(closest_relative_speed):
+            follow_range = max(
+                0.0,
+                float(self._p("follow_distance_m")) + speed * max(0.0, float(self._p("follow_time_gap_s"))),
+            )
+            follow_corridor = collision_distance + max(0.0, float(self._p("corridor_half_width_m")))
+            if (
+                closest_relative_speed > 0.0
+                and follow_distance <= follow_range
+                and min_predicted_distance <= follow_corridor
+            ):
+                follow_speed_limit = max(
+                    float(self._p("min_follow_speed_mps")),
+                    closest_opponent_speed + max(0.0, float(self._p("relative_speed_allowance_mps"))),
+                )
 
         return RiskMetrics(
             front_distance_current_m=front_distance_current,
@@ -311,6 +387,10 @@ class LongitudinalSafetyFilterNode(Node):
             opponent_prediction_source=opponent_source,
             collision_x=collision_x,
             collision_y=collision_y,
+            opponent_observed_speed_mps=closest_opponent_speed,
+            relative_speed_mps=closest_relative_speed,
+            follow_speed_limit_mps=follow_speed_limit,
+            follow_distance_m=follow_distance,
         )
 
     def _current_front_distance(
@@ -365,6 +445,13 @@ class LongitudinalSafetyFilterNode(Node):
         prediction: List[EgoPredictionPoint] = []
         for index, pose in enumerate(poses[: step_count + 1]):
             position = pose.pose.position
+            if index > 0:
+                segment_dt = max(1.0e-6, dt)
+                point_speed = (cumulative[index] - cumulative[index - 1]) / segment_dt
+            elif len(cumulative) > 1:
+                point_speed = (cumulative[1] - cumulative[0]) / max(1.0e-6, dt)
+            else:
+                point_speed = 0.0
             if index + 1 < len(poses):
                 next_position = poses[index + 1].pose.position
                 yaw = math.atan2(next_position.y - position.y, next_position.x - position.x)
@@ -381,6 +468,7 @@ class LongitudinalSafetyFilterNode(Node):
                     yaw=yaw,
                     distance_m=cumulative[index],
                     source="mpc_prediction",
+                    speed_mps=point_speed,
                 )
             )
         return prediction
@@ -411,6 +499,7 @@ class LongitudinalSafetyFilterNode(Node):
                     yaw=ego_yaw,
                     distance_m=distance,
                     source="fallback_straight_prediction",
+                    speed_mps=speed,
                 )
             )
         return prediction
@@ -447,6 +536,7 @@ class LongitudinalSafetyFilterNode(Node):
                     yaw=yaw,
                     distance_m=distance,
                     source="selected_trajectory",
+                    speed_mps=speed,
                 )
             )
         return prediction
@@ -477,9 +567,8 @@ class LongitudinalSafetyFilterNode(Node):
             cumulative.append(cumulative[-1] + math.hypot(cur.x - prev.x, cur.y - prev.y))
         total_length = cumulative[-1]
         start_s = cumulative[nearest_index]
-        speed = math.hypot(obstacle.vx, obstacle.vy)
-        if speed < 0.1:
-            speed = float(self._p("opponent_default_speed_mps"))
+        _, _, start_yaw = self._sample_trajectory(points, cumulative, start_s, total_length)
+        speed = max(0.0, obstacle.vx * math.cos(start_yaw) + obstacle.vy * math.sin(start_yaw))
 
         prediction: List[EgoPredictionPoint] = []
         for ego_point in ego_prediction:
@@ -493,6 +582,7 @@ class LongitudinalSafetyFilterNode(Node):
                     yaw=yaw,
                     distance_m=distance,
                     source="published_trajectory",
+                    speed_mps=speed,
                 )
             )
         return prediction
@@ -512,6 +602,7 @@ class LongitudinalSafetyFilterNode(Node):
                     yaw=yaw,
                     distance_m=math.hypot(obstacle.vx, obstacle.vy) * ego_point.t,
                     source="linear_v2x_fallback",
+                    speed_mps=math.hypot(obstacle.vx, obstacle.vy),
                 )
             )
         return prediction
@@ -549,6 +640,10 @@ class LongitudinalSafetyFilterNode(Node):
             predicted_collision_distance_m=metrics.predicted_collision_distance_m,
             prediction_source=metrics.prediction_source,
             opponent_prediction_source=metrics.opponent_prediction_source,
+            opponent_observed_speed_mps=metrics.opponent_observed_speed_mps,
+            relative_speed_mps=metrics.relative_speed_mps,
+            follow_speed_limit_mps=metrics.follow_speed_limit_mps,
+            follow_distance_m=metrics.follow_distance_m,
         )
 
         comfortable = max(0.1, float(self._p("comfortable_decel_mps2")))
@@ -582,6 +677,12 @@ class LongitudinalSafetyFilterNode(Node):
             decision.speed_limit_mps = speed_limit(emergency)
             decision.acceleration_limit_mps2 = -emergency
             decision.risk_class = "COMMITTED"
+        elif math.isfinite(metrics.follow_speed_limit_mps):
+            decision.state = "FOLLOW"
+            decision.reason = "closing_to_observed_v2x_vehicle"
+            decision.speed_limit_mps = metrics.follow_speed_limit_mps
+            decision.acceleration_limit_mps2 = -comfortable
+            decision.risk_class = "RISKY"
         elif math.isfinite(metrics.predicted_ttc_s) and (
             metrics.predicted_ttc_s <= float(self._p("avoid_with_slowdown_ttc_s"))
             or metrics.predicted_collision_distance_m <= decision.warning_distance_m
@@ -655,6 +756,12 @@ class LongitudinalSafetyFilterNode(Node):
             "risk_class": decision.risk_class,
             "prediction_source": decision.prediction_source,
             "opponent_prediction_source": decision.opponent_prediction_source,
+            "opponent_observed_speed_mps": self._finite_or_none(
+                decision.opponent_observed_speed_mps
+            ),
+            "relative_speed_mps": self._finite_or_none(decision.relative_speed_mps),
+            "follow_speed_limit_mps": self._finite_or_none(decision.follow_speed_limit_mps),
+            "follow_distance_m": self._finite_or_none(decision.follow_distance_m),
             "raw_speed_mps": None if raw is None else float(raw.longitudinal.speed),
             "filtered_speed_mps": None if filtered is None else float(filtered.longitudinal.speed),
             "raw_acceleration_mps2": None if raw is None else float(raw.longitudinal.acceleration),
@@ -708,6 +815,10 @@ class LongitudinalSafetyFilterNode(Node):
             f"ttc: {self._fmt(decision.ttc_s)} s, "
             f"collision_s: {self._fmt(decision.predicted_collision_distance_m)} m\n"
             f"front_now: {self._fmt(decision.front_distance_current_m)} m\n"
+            f"opp_v: {self._fmt(decision.opponent_observed_speed_mps)} m/s, "
+            f"rel_v: {self._fmt(decision.relative_speed_mps)} m/s\n"
+            f"follow_limit: {self._fmt(decision.follow_speed_limit_mps)} m/s, "
+            f"follow_s: {self._fmt(decision.follow_distance_m)} m\n"
             f"warn: {self._fmt(decision.warning_distance_m)} m, "
             f"brake: {self._fmt(decision.brake_distance_m)} m\n"
             f"speed_limit: {self._fmt(decision.speed_limit_mps)} m/s, "
@@ -789,6 +900,8 @@ class LongitudinalSafetyFilterNode(Node):
             return ColorRGBA(r=1.0, g=0.0, b=0.0, a=0.8)
         if state == "AVOID_WITH_SLOWDOWN":
             return ColorRGBA(r=1.0, g=0.8, b=0.0, a=0.8)
+        if state == "FOLLOW":
+            return ColorRGBA(r=0.6, g=1.0, b=0.0, a=0.8)
         if state == "AVOID":
             return ColorRGBA(r=0.0, g=0.8, b=1.0, a=0.75)
         return ColorRGBA(r=0.0, g=1.0, b=0.2, a=0.75)
