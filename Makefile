@@ -1,8 +1,8 @@
 # make file inspired by https://roborovsky-racers.github.io/RoborovskyNote/
 SHELL := /bin/bash
 
-.PHONY: autoware-build autoware-vehicle autoware-simulator autoware-request-initialpose autoware-request-control  awsim-request-start awsim-request-reset autoware-driver-zenoh \
-	simulator dev dev2 dev3 dev4 driver zenoh download rviz2 down down2 down3 down4 ps autoware-bash
+.PHONY: autoware-build autoware-vehicle autoware-simulator autoware-simulation autoware-request-initialpose autoware-request-control  autoware-request-start autoware-driver-zenoh \
+	simulator simulator-reset dev dev2 dev3 dev4 driver zenoh download rviz2 down down2 down3 down4 ps autoware-bash
 
 # Used by docker-compose.yml for build/eval artifact ownership.
 HOST_UID ?= $(shell id -u)
@@ -14,6 +14,14 @@ unexport ROS_DOMAIN_ID
 ifeq ($(origin ROS_DOMAIN_ID),command line)
 export ROS_DOMAIN_ID
 endif
+
+
+ROS_DOMAIN_ID := 1
+USE_CPP_MPC ?= true
+V2X_SAFETY_DEBUG ?= false
+V2X_SAFETY_DEBUG_MODE ?= trajectory_relative
+V2X_SAFETY_DEBUG_SCENARIO ?= front_slowdown
+SIMULATOR_DC ?= docker compose -f docker-compose.yml -f docker-compose.gpu.yml
 
 TIMESTAMP := $(shell date +%Y%m%d-%H%M%S)
 LOG_DIR := /output/$(TIMESTAMP)
@@ -30,7 +38,13 @@ autoware-vehicle:
 # run autoware for simulator
 autoware-simulator:
 	@echo "Start Autoware for AWSIM"
-	LOG_DIR=$(LOG_DIR) RUN_MODE=awsim docker compose up -d autoware
+	LOG_DIR=$(LOG_DIR) RUN_MODE=awsim-no-viz ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) USE_CPP_MPC=$(USE_CPP_MPC) V2X_SAFETY_DEBUG=$(V2X_SAFETY_DEBUG) V2X_SAFETY_DEBUG_MODE=$(V2X_SAFETY_DEBUG_MODE) V2X_SAFETY_DEBUG_SCENARIO=$(V2X_SAFETY_DEBUG_SCENARIO) docker compose up -d autoware
+
+autoware-simulation: autoware-simulator
+
+autoware-simulation-cpp: USE_CPP_MPC := true
+autoware-simulation-cpp: autoware-simulator
+
 
 # autoware command service use ROS_DOMAIN_ID from .env
 autoware-request-initialpose:
@@ -49,7 +63,7 @@ awsim-request-reset:
 # run simulator (docker compose up -d simulator)
 simulator:
 	@echo "Start AWSIM (SIM_MODE=$(SIM_MODE))"
-	LOG_DIR=$(LOG_DIR) SIM_MODE=$(SIM_MODE) ROS_DOMAIN_ID=0 docker compose up -d simulator
+	LOG_DIR=$(LOG_DIR) SIM_MODE=$(SIM_MODE) ROS_DOMAIN_ID=0 $(SIMULATOR_DC) up -d simulator
 
 # racing kart (docker compose up -d driver)
 driver:
