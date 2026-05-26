@@ -14,6 +14,7 @@ x-autoware-base: &autoware-base
     - RUN_MODE=${RUN_MODE:-}
     - SIM_MODE=${SIM_MODE:-}
     - CMD=${CMD:-}
+    - CONTROL_METHOD=${CONTROL_METHOD:-pure_pursuit}
     - USE_CPP_MPC=${USE_CPP_MPC:-true}
     - V2X_SAFETY_DEBUG=${V2X_SAFETY_DEBUG:-false}
     - V2X_SAFETY_DEBUG_MODE=${V2X_SAFETY_DEBUG_MODE:-trajectory_relative}

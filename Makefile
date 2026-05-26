@@ -17,6 +17,7 @@ endif
 
 
 ROS_DOMAIN_ID := 1
+CONTROL_METHOD ?= pure_pursuit
 USE_CPP_MPC ?= true
 V2X_SAFETY_DEBUG ?= false
 V2X_SAFETY_DEBUG_MODE ?= trajectory_relative
@@ -33,12 +34,12 @@ autoware-build:
 # run autoware for vehicle
 autoware-vehicle:
 	@echo "Start Autoware for Vehicle"
-	LOG_DIR=$(LOG_DIR) RUN_MODE=vehicle docker compose up -d autoware
+	LOG_DIR=$(LOG_DIR) RUN_MODE=vehicle CONTROL_METHOD=$(CONTROL_METHOD) docker compose up -d autoware
 
 # run autoware for simulator
 autoware-simulator:
 	@echo "Start Autoware for AWSIM"
-	LOG_DIR=$(LOG_DIR) RUN_MODE=awsim-no-viz ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) USE_CPP_MPC=$(USE_CPP_MPC) V2X_SAFETY_DEBUG=$(V2X_SAFETY_DEBUG) V2X_SAFETY_DEBUG_MODE=$(V2X_SAFETY_DEBUG_MODE) V2X_SAFETY_DEBUG_SCENARIO=$(V2X_SAFETY_DEBUG_SCENARIO) docker compose up -d autoware
+	LOG_DIR=$(LOG_DIR) RUN_MODE=awsim-no-viz ROS_DOMAIN_ID=$(ROS_DOMAIN_ID) CONTROL_METHOD=$(CONTROL_METHOD) USE_CPP_MPC=$(USE_CPP_MPC) V2X_SAFETY_DEBUG=$(V2X_SAFETY_DEBUG) V2X_SAFETY_DEBUG_MODE=$(V2X_SAFETY_DEBUG_MODE) V2X_SAFETY_DEBUG_SCENARIO=$(V2X_SAFETY_DEBUG_SCENARIO) docker compose up -d autoware
 
 autoware-simulation: autoware-simulator
 
@@ -84,7 +85,7 @@ dev4: SIM_MODE := 4p
 dev2 dev3 dev4: simulator
 	@N=$(@:dev%=%); \
 	echo "Start $$N-vehicle dev (autoware on ROS_DOMAIN_ID 1..$$N via docker compose -p)"; \
-	for p in $$(seq 1 $$N); do LOG_DIR=$(LOG_DIR) ROS_DOMAIN_ID=$$p docker compose -p $$p up -d autoware; done; \
+	for p in $$(seq 1 $$N); do LOG_DIR=$(LOG_DIR) ROS_DOMAIN_ID=$$p CONTROL_METHOD=$(CONTROL_METHOD) docker compose -p $$p up -d autoware; done; \
 	$(MAKE) awsim-request-start; \
 	echo "To Stop: make down"
 

@@ -25,6 +25,7 @@ case "${mode}" in
 esac
 
 export ROS_DOMAIN_ID=$id
+control_method="${CONTROL_METHOD:-pure_pursuit}"
 use_cpp_mpc="${USE_CPP_MPC:-true}"
 v2x_safety_debug="${V2X_SAFETY_DEBUG:-false}"
 v2x_safety_debug_mode="${V2X_SAFETY_DEBUG_MODE:-trajectory_relative}"
@@ -43,6 +44,7 @@ mkdir -p "${ROS_LOG_DIR}"
 ros2 launch aichallenge_system_launch aichallenge_system.launch.xml \
     "${opts[@]}" \
     "domain_id:=$id" \
+    "control_method:=${control_method}" \
     "use_cpp_mpc:=${use_cpp_mpc}" \
     "launch_v2x_safety_debug:=${v2x_safety_debug}" \
     "v2x_safety_debug_mode:=${v2x_safety_debug_mode}" \

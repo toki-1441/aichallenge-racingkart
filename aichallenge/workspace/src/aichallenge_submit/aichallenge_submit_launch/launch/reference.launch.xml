@@ -18,7 +18,7 @@
   <log message="echo launch param use_sim_time: $(var use_sim_time) launch_vehicle_interface: $(var launch_vehicle_interface) sensor_model: $(var sensor_model)"/>
 
   <!-- Control method -->
-  <arg name="control_method" default="mpc"
+  <arg name="control_method" default="pure_pursuit"
        description="Select control: mpc, pure_pursuit, tiny_lidar_net, joycon, keyboard"/>
   <arg name="launch_v2x_avoidance_planner" default="false" description="Generate a wall-safe V2X avoidance trajectory"/>
   <arg name="launch_longitudinal_safety_filter" default="false" description="Filter control_cmd with V2X longitudinal safety"/>
@@ -138,32 +138,32 @@
 
       <!-- Customizable -->
       <node pkg="simple_trajectory_generator" exec="simple_trajectory_generator_node" name="simple_trajectory_generator" output="screen" if="$(var launch_v2x_avoidance_planner)">
-            <param name="csv_path" value="$(find-pkg-share simple_trajectory_generator)/data/raceline_awsim_30km_from_garage.csv"/>
+            <param name="csv_path" value="$(find-pkg-share simple_trajectory_generator)/data/raceline_awsim_15km.csv"/>
             <param name="z" value="6.5"/>
             <param name="enable_resampling" value="true"/>
             <param name="resample_interval_m" value="0.5"/>
             <param name="enable_velocity_profile" value="true"/>
-            <param name="velocity_profile_max_velocity_mps" value="8.3"/>
+            <param name="velocity_profile_max_velocity_mps" value="4.1667"/>
             <param name="velocity_profile_min_velocity_mps" value="1.2"/>
             <param name="velocity_profile_max_lateral_accel_mps2" value="3.0"/>
             <param name="velocity_profile_max_accel_mps2" value="5.0"/>
             <param name="velocity_profile_max_decel_mps2" value="2.5"/>
-            <param name="velocity_profile_use_csv_velocity_limit" value="false"/>
+            <param name="velocity_profile_use_csv_velocity_limit" value="true"/>
             <remap from="trajectory" to="reference_trajectory"/>
       </node>
 
       <node pkg="simple_trajectory_generator" exec="simple_trajectory_generator_node" name="simple_trajectory_generator" output="screen" unless="$(var launch_v2x_avoidance_planner)">
-            <param name="csv_path" value="$(find-pkg-share simple_trajectory_generator)/data/raceline_awsim_30km_from_garage.csv"/>
+            <param name="csv_path" value="$(find-pkg-share simple_trajectory_generator)/data/raceline_awsim_15km.csv"/>
             <param name="z" value="6.5"/>
             <param name="enable_resampling" value="true"/>
             <param name="resample_interval_m" value="0.5"/>
             <param name="enable_velocity_profile" value="true"/>
-            <param name="velocity_profile_max_velocity_mps" value="8.3"/>
+            <param name="velocity_profile_max_velocity_mps" value="4.1667"/>
             <param name="velocity_profile_min_velocity_mps" value="1.2"/>
             <param name="velocity_profile_max_lateral_accel_mps2" value="3.0"/>
             <param name="velocity_profile_max_accel_mps2" value="5.0"/>
             <param name="velocity_profile_max_decel_mps2" value="2.5"/>
-            <param name="velocity_profile_use_csv_velocity_limit" value="false"/>
+            <param name="velocity_profile_use_csv_velocity_limit" value="true"/>
       </node>
 
       <group if="$(var launch_v2x_avoidance_planner)">
