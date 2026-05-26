@@ -138,7 +138,7 @@
 
       <!-- Customizable -->
       <node pkg="simple_trajectory_generator" exec="simple_trajectory_generator_node" name="simple_trajectory_generator" output="screen" if="$(var launch_v2x_avoidance_planner)">
-            <param name="csv_path" value="$(find-pkg-share simple_trajectory_generator)/data/raceline_awsim_30km_from_garage.csv"/>
+            <param name="csv_path" value="$(find-pkg-share simple_trajectory_generator)/data/raceline_awsim_30km.csv"/>
             <param name="z" value="6.5"/>
             <param name="enable_resampling" value="true"/>
             <param name="resample_interval_m" value="0.5"/>
@@ -153,7 +153,7 @@
       </node>
 
       <node pkg="simple_trajectory_generator" exec="simple_trajectory_generator_node" name="simple_trajectory_generator" output="screen" unless="$(var launch_v2x_avoidance_planner)">
-            <param name="csv_path" value="$(find-pkg-share simple_trajectory_generator)/data/raceline_awsim_30km_from_garage.csv"/>
+            <param name="csv_path" value="$(find-pkg-share simple_trajectory_generator)/data/raceline_awsim_30km.csv"/>
             <param name="z" value="6.5"/>
             <param name="enable_resampling" value="true"/>
             <param name="resample_interval_m" value="0.5"/>
