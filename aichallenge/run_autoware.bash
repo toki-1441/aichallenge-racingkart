@@ -25,6 +25,10 @@ case "${mode}" in
 esac
 
 export ROS_DOMAIN_ID=$id
+use_cpp_mpc="${USE_CPP_MPC:-true}"
+v2x_safety_debug="${V2X_SAFETY_DEBUG:-false}"
+v2x_safety_debug_mode="${V2X_SAFETY_DEBUG_MODE:-trajectory_relative}"
+v2x_safety_debug_scenario="${V2X_SAFETY_DEBUG_SCENARIO:-front_slowdown}"
 
 mkdir -p "${out_dir}"
 exec >"${out_dir}/autoware.log" 2>&1
@@ -37,6 +41,12 @@ mkdir -p "${ROS_LOG_DIR}"
 
 # set -m keeps bash from setting SIGINT to SIG_IGN on the backgrounded child (then the forwarded INT would be a no-op).
 set -m
-ros2 launch aichallenge_system_launch aichallenge_system.launch.xml "${opts[@]}" "domain_id:=$id" &
+ros2 launch aichallenge_system_launch aichallenge_system.launch.xml \
+    "${opts[@]}" \
+    "domain_id:=$id" \
+    "use_cpp_mpc:=${use_cpp_mpc}" \
+    "launch_v2x_safety_debug:=${v2x_safety_debug}" \
+    "v2x_safety_debug_mode:=${v2x_safety_debug_mode}" \
+    "v2x_safety_debug_scenario:=${v2x_safety_debug_scenario}" &
 trap 'kill -INT $! 2>/dev/null' TERM INT
 while kill -0 $! 2>/dev/null; do wait; done
